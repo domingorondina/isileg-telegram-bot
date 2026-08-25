@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: isileg-telegram-bot
+    env: docker
+    plan: free
+    region: oregon
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: PORT
+        value: 8080
