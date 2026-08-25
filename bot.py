@@ -90,6 +90,14 @@ def extract_year_from_dates(*dates) -> str:
                 return m.group(1)
     return ""
 
+def shorten_text(text: str, max_len: int = 40) -> str:
+    if not text:
+        return ""
+    clean = " ".join(text.split())
+    if len(clean) > max_len:
+        return clean[:max_len-3] + "..."
+    return clean
+
 def build_sf_ley_card(detail: dict) -> str:
     """Construye la tarjeta de una Ley o Decreto de Santa Fe (ISILeg)."""
     num_ley = detail.get("numeroLey", "S/N")
@@ -127,7 +135,7 @@ def build_sf_ley_card(detail: dict) -> str:
     if num_exp != "-":
         card += f"📁 <b>Expediente:</b> {html.escape(str(num_exp))}\n"
 
-    card += f"\n📝 <b>Asunto:</b>\n<i>{html.escape(str(asunto))}</i>\n"
+    card += f"\n📝 <b>Asunto / Tema:</b>\n<i>{html.escape(str(asunto))}</i>\n"
 
     if comentario:
         card += f"\n📌 <b>Notas / Modificaciones:</b>\n{html.escape(str(comentario))[:400]}\n"
@@ -160,7 +168,7 @@ def build_nacion_norma_card(detail: dict) -> str:
     if modificada_por > 0:
         card += f"⚠️ <b>Modificada/Abrogada por:</b> {modificada_por} norma(s)\n"
 
-    card += f"\n📝 <b>Sumario:</b>\n<i>{html.escape(str(sumario))}</i>\n"
+    card += f"\n📝 <b>Sumario / Tema:</b>\n<i>{html.escape(str(sumario))}</i>\n"
 
     if observaciones:
         card += f"\n📌 <b>Observaciones / Vigencia:</b>\n<b>{html.escape(str(observaciones))}</b>\n"
@@ -177,7 +185,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🏢 <b>SIN / Boletín Oficial</b>: Actos y Decretos del <b>Poder Ejecutivo de Santa Fe</b>.\n"
         "• 🇦🇷 <b>InfoLEG</b>: Leyes, Decretos y DNU de la <b>República Argentina (Nación)</b>.\n\n"
         "🔍 <b>¿Cómo buscar?</b>\n"
-        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>2751</code>, <code>10260</code>) o número con año (ej. <code>2751/2008</code>, <code>70/2023</code>).\n"
+        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>2751</code>) o número con año (ej. <code>2751/2008</code>, <code>70/2023</code>).\n"
         "2. <b>Por tema</b>: Escribe palabras clave (ej: <code>contrato de trabajo</code>, <code>salud</code>, <code>presupuesto</code>).\n\n"
         "💡 <i>Podrás descargar PDFs oficiales, leer textos actualizados y navegar genealogías legislativas.</i>"
     )
@@ -208,14 +216,9 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
     )
 
     try:
-        # Consultar en paralelo:
-        # 1. Santa Fe - Leyes (tipo_ley=1)
         sf_ley_task = isileg_api.search_leyes(numero_ley=numero, tipo_ley=1, page=0, page_size=2)
-        # 2. Santa Fe - Decretos Provinciales (tipo_ley=3)
         sf_dec_task = isileg_api.search_leyes(numero_ley=numero, tipo_ley=3, page=0, page_size=5)
-        # 3. Nación - Leyes
         nac_ley_task = infoleg_api.search_normas(tipo_norma="1", numero=numero, anio_sancion=anio, limit=3)
-        # 4. Nación - Decretos
         nac_dec_task = infoleg_api.search_normas(tipo_norma="2", numero=numero, anio_sancion=anio, limit=5)
 
         sf_leys, sf_decs, nac_leys, nac_decs = await asyncio.gather(
@@ -255,42 +258,77 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         )
         return
 
-    # Construir opciones del menú con año explícito
+    # Si hay una única coincidencia, mostramos la tarjeta directa
+    if total_opciones == 1:
+        if len(sf_ley_items) == 1:
+            await show_sf_ley_card(msg, sf_ley_items[0]["idLey"])
+            return
+        elif len(sf_dec_items) == 1:
+            await show_sf_ley_card(msg, sf_dec_items[0]["idLey"])
+            return
+        elif len(nac_ley_items) == 1:
+            await show_nacion_norma_card(msg, nac_ley_items[0]["id"])
+            return
+        elif len(nac_dec_items) == 1:
+            await show_nacion_norma_card(msg, nac_dec_items[0]["id"])
+            return
+
+    # Construir menú detallado con sumario temático
+    menu_text = f"🏛️ <b>Se encontraron {total_opciones} normas con el {html.escape(busqueda_desc)}:</b>\n\n"
     buttons = []
+    item_num = 1
 
     # 1. Santa Fe - Leyes Provinciales
     for item in sf_ley_items:
         id_ley = item["idLey"]
         y_str = f" ({item['_year']})" if item.get("_year") else ""
-        label = f"🏛️ [Santa Fe] Ley Prov. Nº {numero}{y_str}"
-        buttons.append([InlineKeyboardButton(label, callback_data=f"sf:card:{id_ley}")])
+        asunto = item.get("asunto") or "Sin asunto"
+        asunto_short = shorten_text(asunto, 35)
 
-    # 2. Santa Fe - Decretos Provinciales (con año exacto de cada decreto)
+        menu_text += f"{item_num}. 🏛️ <b>[Santa Fe] Ley Prov. Nº {numero}{y_str}</b>\n   <i>{html.escape(asunto[:90])}</i>\n\n"
+        btn_label = f"🏛️ Ley Prov. {numero}{y_str}: {asunto_short}"
+        buttons.append([InlineKeyboardButton(btn_label[:55], callback_data=f"sf:card:{id_ley}")])
+        item_num += 1
+
+    # 2. Santa Fe - Decretos Provinciales
     for item in sf_dec_items:
         id_ley = item["idLey"]
         y_str = f" / {item['_year']}" if item.get("_year") else ""
-        label = f"🏢 [Santa Fe] Decreto Prov. Nº {numero}{y_str}"
-        buttons.append([InlineKeyboardButton(label, callback_data=f"sf:card:{id_ley}")])
+        asunto = item.get("asunto") or "Sin asunto"
+        asunto_short = shorten_text(asunto, 35)
+
+        menu_text += f"{item_num}. 🏢 <b>[Santa Fe] Decreto Prov. Nº {numero}{y_str}</b>\n   <i>{html.escape(asunto[:90])}</i>\n\n"
+        btn_label = f"🏢 Dto. Prov. {numero}{y_str}: {asunto_short}"
+        buttons.append([InlineKeyboardButton(btn_label[:55], callback_data=f"sf:card:{id_ley}")])
+        item_num += 1
 
     # 3. Nación - Leyes
     for item in nac_ley_items:
         nid = item["id"]
         tipo_lbl = " ".join(item.get("tipo_numero", f"Ley {numero}").split())
-        label = f"🇦🇷 [Nación] {tipo_lbl[:35]}"
-        buttons.append([InlineKeyboardButton(label, callback_data=f"nac:card:{nid}")])
+        sumario = item.get("sumario") or ""
+        sumario_short = shorten_text(sumario, 35)
 
-    # 4. Nación - Decretos (con indicación clara del año)
+        menu_text += f"{item_num}. 🇦🇷 <b>[Nación] {html.escape(tipo_lbl)}</b>\n   <i>{html.escape(sumario[:90])}</i>\n\n"
+        btn_label = f"🇦🇷 {tipo_lbl}: {sumario_short}"
+        buttons.append([InlineKeyboardButton(btn_label[:55], callback_data=f"nac:card:{nid}")])
+        item_num += 1
+
+    # 4. Nación - Decretos
     for item in nac_dec_items:
         nid = item["id"]
         tipo_lbl = " ".join(item.get("tipo_numero", f"Decreto {numero}").split())
-        label = f"🇦🇷 [Nación] {tipo_lbl[:35]}"
-        buttons.append([InlineKeyboardButton(label, callback_data=f"nac:card:{nid}")])
+        sumario = item.get("sumario") or ""
+        sumario_short = shorten_text(sumario, 35)
+
+        menu_text += f"{item_num}. 🇦🇷 <b>[Nación] {html.escape(tipo_lbl)}</b>\n   <i>{html.escape(sumario[:90])}</i>\n\n"
+        btn_label = f"🇦🇷 {tipo_lbl}: {sumario_short}"
+        buttons.append([InlineKeyboardButton(btn_label[:55], callback_data=f"nac:card:{nid}")])
+        item_num += 1
+
+    menu_text += "👇 <i>Toca una opción para ver la ficha completa y descargar textos oficiales:</i>"
 
     reply_markup = InlineKeyboardMarkup(buttons)
-    menu_text = (
-        f"🏛️ <b>Se encontraron normas coincidentes con el {html.escape(busqueda_desc)}:</b>\n\n"
-        f"Selecciona la norma que deseas consultar:"
-    )
     await msg.edit_text(menu_text, reply_markup=reply_markup, parse_mode="HTML")
 
 # --- Renderizado de Tarjetas ---
@@ -478,7 +516,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("⚠️ No se pudo recuperar el texto de la norma.")
         return
 
-    # 4. Modificaciones / Vínculos de Nación
+    # 4. Modificaciones / Vínculos de Nación (modo 1 y modo 2 unificados)
     elif data.startswith("nac:rel:"):
         nid = data.split(":")[2]
         status_msg = await query.message.reply_text("⏳ Consultando modificaciones y vínculos en InfoLEG...")
@@ -535,7 +573,7 @@ def main():
     port = int(os.getenv("PORT", "8080"))
     threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
 
-    logger.info("Iniciando Bot Legislativo Unificado con soporte por Año...")
+    logger.info("Iniciando Bot Legislativo Unificado con previsualización de temas...")
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
