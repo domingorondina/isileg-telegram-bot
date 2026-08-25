@@ -142,6 +142,19 @@ def build_sf_ley_card(detail: dict) -> str:
 
     return card
 
+def build_sf_decreto_generico_card(numero: str, anio: str = "") -> str:
+    """Construye la tarjeta de consulta para Decretos del Poder Ejecutivo de Santa Fe."""
+    decreto_title = f"Decretos Provinciales Nº {numero}/{anio}" if anio else f"Decretos Provinciales Nº {numero}"
+    card = (
+        f"🏢 <b>[Santa Fe - Poder Ejecutivo] {html.escape(decreto_title)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏛️ <b>Emisor:</b> Poder Ejecutivo de la Provincia de Santa Fe (Gobernación y Ministerios)\n"
+        f"📋 <b>Régimen de Emisión:</b> En la Provincia de Santa Fe, el Poder Ejecutivo emite anualmente decretos correlativos numerados del 1 en adelante para cada ejercicio anual.\n\n"
+        f"📰 <b>Publicación Oficial:</b> Publicados en el Boletín Oficial de la Provincia de Santa Fe y archivados en el Sistema SIN.\n\n"
+        f"👇 <i>Accede directamente a las fuentes oficiales de publicación provincial:</i>"
+    )
+    return card
+
 def build_nacion_norma_card(detail: dict) -> str:
     """Construye la tarjeta de una Norma Nacional (InfoLEG)."""
     raw_tipo = detail.get("tipo_numero") or f"Norma ID {detail.get('id')}"
@@ -185,7 +198,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🏢 <b>SIN / Boletín Oficial</b>: Actos y Decretos del <b>Poder Ejecutivo de Santa Fe</b>.\n"
         "• 🇦🇷 <b>InfoLEG</b>: Leyes, Decretos y DNU de la <b>República Argentina (Nación)</b>.\n\n"
         "🔍 <b>¿Cómo buscar?</b>\n"
-        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>2751</code>, <code>2439</code>) o número con año (ej. <code>2751/2008</code>, <code>70/2023</code>).\n"
+        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>2756</code>) o número con año (ej. <code>2751/2008</code>, <code>70/2023</code>).\n"
         "2. <b>Por tema</b>: Escribe palabras clave (ej: <code>contrato de trabajo</code>, <code>salud</code>, <code>presupuesto</code>).\n\n"
         "💡 <i>Podrás descargar PDFs oficiales, leer textos actualizados y navegar genealogías legislativas.</i>"
     )
@@ -249,34 +262,10 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
     nac_ley_items = nac_leys if isinstance(nac_leys, list) else []
     nac_dec_items = nac_decs if isinstance(nac_decs, list) else []
 
-    total_opciones = len(sf_ley_items) + len(sf_dec_items) + len(nac_ley_items) + len(nac_dec_items)
-
-    if total_opciones == 0:
-        await msg.edit_text(
-            f"❌ No se encontró ninguna norma con el {html.escape(busqueda_desc)} en Santa Fe ni en Nación.",
-            parse_mode="HTML"
-        )
-        return
-
-    # Si hay una única coincidencia, mostramos la tarjeta directa
-    if total_opciones == 1:
-        if len(sf_ley_items) == 1:
-            await show_sf_ley_card(msg, sf_ley_items[0]["idLey"])
-            return
-        elif len(sf_dec_items) == 1:
-            await show_sf_ley_card(msg, sf_dec_items[0]["idLey"])
-            return
-        elif len(nac_ley_items) == 1:
-            await show_nacion_norma_card(msg, nac_ley_items[0]["id"])
-            return
-        elif len(nac_dec_items) == 1:
-            await show_nacion_norma_card(msg, nac_dec_items[0]["id"])
-            return
-
-    # Construir mensaje con lista de sumarios temáticos limpios
-    menu_text = f"🏛️ <b>Se encontraron {total_opciones} normas coincidentes con el {html.escape(busqueda_desc)}:</b>\n\n"
+    # Construir lista de opciones
     buttons = []
     item_num = 1
+    menu_lines = []
 
     # 1. Santa Fe - Leyes Provinciales
     for item in sf_ley_items:
@@ -285,27 +274,38 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         asunto = item.get("asunto") or "Sin asunto registrado"
         asunto_short = shorten_text(asunto, 32)
 
-        menu_text += (
+        menu_lines.append(
             f"<b>{item_num}. 🏛️ [Santa Fe] Ley Provincial Nº {numero}{y_str}</b>\n"
-            f"   📝 <i>{html.escape(asunto[:120])}</i>\n\n"
+            f"   📝 <i>{html.escape(asunto[:120])}</i>\n"
         )
         btn_label = f"🏛️ [SF] Ley {numero}{y_str}: {asunto_short}"
         buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sf:card:{id_ley}")])
         item_num += 1
 
-    # 2. Santa Fe - Decretos Provinciales
-    for item in sf_dec_items:
-        id_ley = item["idLey"]
-        y_str = f" / {item['_year']}" if item.get("_year") else ""
-        asunto = item.get("asunto") or "Sin asunto registrado"
-        asunto_short = shorten_text(asunto, 32)
+    # 2. Santa Fe - Decretos Provinciales (Específicos de ISILeg o Genérico del Ejecutivo)
+    if sf_dec_items:
+        for item in sf_dec_items:
+            id_ley = item["idLey"]
+            y_str = f" / {item['_year']}" if item.get("_year") else ""
+            asunto = item.get("asunto") or "Sin asunto registrado"
+            asunto_short = shorten_text(asunto, 32)
 
-        menu_text += (
-            f"<b>{item_num}. 🏢 [Santa Fe] Decreto Provincial Nº {numero}{y_str}</b>\n"
-            f"   📝 <i>{html.escape(asunto[:120])}</i>\n\n"
+            menu_lines.append(
+                f"<b>{item_num}. 🏢 [Santa Fe] Decreto Provincial Nº {numero}{y_str}</b>\n"
+                f"   📝 <i>{html.escape(asunto[:120])}</i>\n"
+            )
+            btn_label = f"🏢 [SF] Dto {numero}{y_str}: {asunto_short}"
+            buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sf:card:{id_ley}")])
+            item_num += 1
+    else:
+        # Siempre ofrecemos la opción de consultar los Decretos del Poder Ejecutivo de Santa Fe
+        y_str = f" / {anio}" if anio else ""
+        menu_lines.append(
+            f"<b>{item_num}. 🏢 [Santa Fe] Decretos Provinciales Nº {numero}{y_str}</b>\n"
+            f"   📝 <i>Actos y Decretos anuales del Poder Ejecutivo (Gobernación / Boletín Oficial)</i>\n"
         )
-        btn_label = f"🏢 [SF] Dto {numero}{y_str}: {asunto_short}"
-        buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sf:card:{id_ley}")])
+        btn_label = f"🏢 [SF] Decretos Prov. Nº {numero}{y_str} (Ejecutivo)"
+        buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sfdec:gen:{numero}:{anio}")])
         item_num += 1
 
     # 3. Nación - Leyes
@@ -315,9 +315,9 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         sumario = item.get("sumario") or "Sin descripción registrada"
         sumario_short = shorten_text(sumario, 32)
 
-        menu_text += (
+        menu_lines.append(
             f"<b>{item_num}. 🇦🇷 [Nación] {html.escape(tipo_lbl)}</b>\n"
-            f"   📝 <i>{html.escape(sumario[:120])}</i>\n\n"
+            f"   📝 <i>{html.escape(sumario[:120])}</i>\n"
         )
         btn_label = f"🇦🇷 [Nac] {tipo_lbl}: {sumario_short}"
         buttons.append([InlineKeyboardButton(btn_label, callback_data=f"nac:card:{nid}")])
@@ -330,15 +330,17 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         sumario = item.get("sumario") or "Sin descripción registrada"
         sumario_short = shorten_text(sumario, 32)
 
-        menu_text += (
+        menu_lines.append(
             f"<b>{item_num}. 🇦🇷 [Nación] {html.escape(tipo_lbl)}</b>\n"
-            f"   📝 <i>{html.escape(sumario[:120])}</i>\n\n"
+            f"   📝 <i>{html.escape(sumario[:120])}</i>\n"
         )
         btn_label = f"🇦🇷 [Nac] {tipo_lbl}: {sumario_short}"
         buttons.append([InlineKeyboardButton(btn_label, callback_data=f"nac:card:{nid}")])
         item_num += 1
 
-    menu_text += "👇 <i>Toca una opción para ver la ficha completa y descargar textos oficiales:</i>"
+    menu_text = f"🏛️ <b>Se encontraron opciones con el {html.escape(busqueda_desc)}:</b>\n\n"
+    menu_text += "\n".join(menu_lines)
+    menu_text += "\n👇 <i>Toca una opción para ver la ficha completa y descargar textos oficiales:</i>"
 
     reply_markup = InlineKeyboardMarkup(buttons)
     await msg.edit_text(menu_text, reply_markup=reply_markup, parse_mode="HTML")
@@ -370,6 +372,21 @@ async def show_sf_ley_card(target_msg, id_ley: int):
     except Exception as e:
         logger.error(f"Error mostrando tarjeta Santa Fe {id_ley}: {e}")
         await target_msg.edit_text(f"⚠️ Error al cargar detalle de Santa Fe: {html.escape(str(e))}")
+
+async def show_sf_decreto_generico_card(target_msg, numero: str, anio: str = ""):
+    try:
+        card_text = build_sf_decreto_generico_card(numero, anio)
+        buttons = [
+            [
+                InlineKeyboardButton("📰 Boletín Oficial de Santa Fe", url="https://www.santafe.gob.ar/boletinoficial/"),
+                InlineKeyboardButton("🌐 Portal SIN Santa Fe", url="https://www.santafe.gov.ar/normativa/"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await target_msg.edit_text(card_text, reply_markup=reply_markup, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error mostrando decreto genérico Santa Fe {numero}: {e}")
+        await target_msg.edit_text(f"⚠️ Error: {html.escape(str(e))}")
 
 async def show_nacion_norma_card(target_msg, id_norma: str):
     try:
@@ -456,6 +473,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("sf:card:"):
         id_ley = int(data.split(":")[2])
         await show_sf_ley_card(query.message, id_ley)
+        return
+    elif data.startswith("sfdec:gen:"):
+        parts = data.split(":")
+        num = parts[2]
+        anio = parts[3] if len(parts) > 3 else ""
+        await show_sf_decreto_generico_card(query.message, num, anio)
         return
     elif data.startswith("nac:card:"):
         nid = data.split(":")[2]
@@ -585,7 +608,7 @@ def main():
     port = int(os.getenv("PORT", "8080"))
     threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
 
-    logger.info("Iniciando Bot Legislativo Unificado con previsualización limpia...")
+    logger.info("Iniciando Bot Legislativo Unificado con garantía de Decretos Provinciales...")
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
