@@ -149,9 +149,9 @@ def build_sf_decreto_generico_card(numero: str, anio: str = "") -> str:
         f"🏢 <b>[Santa Fe - Poder Ejecutivo] {html.escape(decreto_title)}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"🏛️ <b>Emisor:</b> Poder Ejecutivo de la Provincia de Santa Fe (Gobernación y Ministerios)\n"
-        f"📋 <b>Régimen de Emisión:</b> En la Provincia de Santa Fe, el Poder Ejecutivo emite anualmente decretos correlativos numerados del 1 en adelante para cada ejercicio anual.\n\n"
-        f"📰 <b>Publicación Oficial:</b> Publicados en el Boletín Oficial de la Provincia de Santa Fe y archivados en el Sistema SIN.\n\n"
-        f"👇 <i>Accede directamente a las fuentes oficiales de publicación provincial:</i>"
+        f"📅 <b>Régimen de Emisión Anual:</b> En Santa Fe los decretos se numeran del 1 al 4000+ en cada ejercicio anual independiente (ej. Decreto {numero}/2023, Decreto {numero}/2022, etc.).\n\n"
+        f"💡 <b>Para buscar un año específico:</b> Envía el mensaje con formato <code>{numero}/AAAA</code> (ej: <code>{numero}/2023</code> o <code>{numero}/2019</code>).\n\n"
+        f"📰 <b>Fuentes Oficiales:</b> Boletín Oficial de Santa Fe y Sistema SIN."
     )
     return card
 
@@ -282,7 +282,7 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sf:card:{id_ley}")])
         item_num += 1
 
-    # 2. Santa Fe - Decretos Provinciales (Específicos de ISILeg o Genérico del Ejecutivo)
+    # 2. Santa Fe - Decretos Provinciales
     if sf_dec_items:
         for item in sf_dec_items:
             id_ley = item["idLey"]
@@ -298,11 +298,11 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
             buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sf:card:{id_ley}")])
             item_num += 1
     else:
-        # Siempre ofrecemos la opción de consultar los Decretos del Poder Ejecutivo de Santa Fe
+        # Explicar claramente que los decretos provinciales se numeran por año
         y_str = f" / {anio}" if anio else ""
         menu_lines.append(
             f"<b>{item_num}. 🏢 [Santa Fe] Decretos Provinciales Nº {numero}{y_str}</b>\n"
-            f"   📝 <i>Actos y Decretos anuales del Poder Ejecutivo (Gobernación / Boletín Oficial)</i>\n"
+            f"   📝 <i>Numeración anual (1 a 4000+ por año). Para un año específico escribe: {numero}/AAAA</i>\n"
         )
         btn_label = f"🏢 [SF] Decretos Prov. Nº {numero}{y_str} (Ejecutivo)"
         buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sfdec:gen:{numero}:{anio}")])
@@ -608,7 +608,7 @@ def main():
     port = int(os.getenv("PORT", "8080"))
     threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
 
-    logger.info("Iniciando Bot Legislativo Unificado con garantía de Decretos Provinciales...")
+    logger.info("Iniciando Bot Legislativo Unificado con clarificación de decretos anuales...")
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
