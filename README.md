@@ -32,7 +32,7 @@ El proyecto incluye todos los archivos necesarios para ejecutarse en la nube sin
 3. Haz clic en **New +** ➡️ **Web Service** (o **Blueprint** conectando el repo).
 4. Selecciona tu repositorio `isileg-telegram-bot`.
 5. En la sección **Environment Variables**, agrega:
-   - `TELEGRAM_BOT_TOKEN`: `8901547224:AAFbYVfV5HxtcRYFU111eQSpQgxc9cGr_UU`
+   - `TELEGRAM_BOT_TOKEN`: `tu_token_aqui`
    - `PORT`: `8080`
 6. Haz clic en **Create Web Service**. ¡En 2 minutos estará activo 24/7 en la nube!
 
