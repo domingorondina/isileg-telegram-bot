@@ -15,11 +15,13 @@ DEFAULT_TIMEOUT = 60.0
 class ISILegAPI:
     def __init__(self, base_url: str = BASE_URL):
         self.base_url = base_url
-        self.scraper_api_key = os.getenv("SCRAPER_API_KEY")
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
         }
+
+    def _get_api_key(self) -> Optional[str]:
+        return os.getenv("SCRAPER_API_KEY")
 
     def _build_url(self, target_url: str, params: Optional[Dict[str, Any]] = None, is_binary: bool = False) -> str:
         """
@@ -32,9 +34,10 @@ class ISILegAPI:
         else:
             full_target = target_url
 
-        if self.scraper_api_key:
+        key = self._get_api_key()
+        if key:
             encoded_target = urllib.parse.quote(full_target, safe="")
-            scraper_url = f"https://api.scraperapi.com?api_key={self.scraper_api_key}&url={encoded_target}"
+            scraper_url = f"https://api.scraperapi.com?api_key={key}&url={encoded_target}"
             if is_binary:
                 scraper_url += "&binary_target=true"
             return scraper_url
