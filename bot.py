@@ -52,14 +52,39 @@ api = ISILegAPI()
 PAGE_SIZE = 5
 
 async def handle_http_health_check(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    """Responde con 200 OK a las comprobaciones de estado de Render."""
+    """Responde con 200 OK y permite /test para verificar conectividad con ISILeg desde Render."""
     try:
-        await reader.readline()
+        first_line = await reader.readline()
+        path = "/"
+        if first_line:
+            parts = first_line.decode('utf-8', errors='ignore').split()
+            if len(parts) > 1:
+                path = parts[1]
+                
         while True:
             line = await reader.readline()
             if line == b'\r\n' or line == b'\n' or not line:
                 break
-        response = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
+
+        if path.startswith("/test"):
+            # Probar conexión real con ISILeg desde la IP de Render
+            try:
+                test_res = await api.search_leyes(numero_ley="14207", page=0, page_size=1)
+                body = f"ISILeg OK: Found {test_res.get('cant')} items".encode('utf-8')
+                resp_code = b"200 OK"
+            except Exception as e:
+                body = f"ISILeg ERROR: {type(e).__name__}: {str(e)}".encode('utf-8')
+                resp_code = b"500 Internal Error"
+        else:
+            body = b"OK"
+            resp_code = b"200 OK"
+
+        response = (
+            b"HTTP/1.1 " + resp_code + b"\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n"
+            b"Content-Length: " + str(len(body)).encode('ascii') + b"\r\n"
+            b"Connection: close\r\n\r\n" + body
+        )
         writer.write(response)
         await writer.drain()
     except Exception as e:
