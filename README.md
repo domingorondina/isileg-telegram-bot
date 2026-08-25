@@ -19,22 +19,14 @@ Un bot interactivo para Telegram que permite consultar y descargar leyes provinc
 
 ---
 
-## ☁️ Despliegue 24/7 en Render (Gratis)
+## ☁️ Despliegue en la Nube (Render 24/7)
 
-El proyecto incluye todos los archivos necesarios para ejecutarse en la nube sin depender de tu PC:
-- `Dockerfile`: Contenedor liviano de Python 3.13 con certificados y dependencias.
-- `render.yaml`: Blueprint para desplegar en Render como **Web Service (Plan Free)**.
-- Servidor HTTP integrado en `bot.py` para Health Checks automáticos de Render en el puerto `8080`.
-
-### 🚀 Pasos para Desplegar en Render:
-1. Sube este proyecto a tu cuenta de **GitHub** (ej: `domingorondina/isileg-telegram-bot`).
-2. Entra a tu cuenta en [dashboard.render.com](https://dashboard.render.com/).
-3. Haz clic en **New +** ➡️ **Web Service** (o **Blueprint** conectando el repo).
-4. Selecciona tu repositorio `isileg-telegram-bot`.
-5. En la sección **Environment Variables**, agrega:
-   - `TELEGRAM_BOT_TOKEN`: `tu_token_aqui`
-   - `PORT`: `8080`
-6. Haz clic en **Create Web Service**. ¡En 2 minutos estará activo 24/7 en la nube!
+El bot se encuentra desplegado y funcionando de manera continua en la nube:
+- **Bot de Telegram**: [@isileg_bot](https://t.me/isileg_bot)
+- **Repositorio GitHub**: [https://github.com/domingorondina/isileg-telegram-bot](https://github.com/domingorondina/isileg-telegram-bot)
+- **Dashboard Render**: [https://dashboard.render.com/web/srv-da6r8sh0er6s73d699pg](https://dashboard.render.com/web/srv-da6r8sh0er6s73d699pg)
+- **Health Check URL**: [https://isileg-telegram-bot.onrender.com](https://isileg-telegram-bot.onrender.com)
+- **Estado**: 🟢 **LIVE (24/7 Activo sin necesidad de PC encendida)**
 
 ---
 
