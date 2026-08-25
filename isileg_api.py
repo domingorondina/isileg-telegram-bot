@@ -1,22 +1,45 @@
 """
 Cliente de Integración con ISILeg Web (Senado de Santa Fe)
-Proporciona métodos asíncronos para buscar normas, obtener detalles y descargar documentos PDF.
+Soporta consultas directas y puente de proxy a través de ScraperAPI para despliegues en la nube (Render).
 """
 
+import os
 import httpx
 import re
-from typing import Optional, Dict, Any, List, Union
+import urllib.parse
+from typing import Optional, Dict, Any, List
 
 BASE_URL = "https://isilegweb.senadosantafe.gob.ar/api"
-DEFAULT_TIMEOUT = 15.0
+DEFAULT_TIMEOUT = 60.0
 
 class ISILegAPI:
     def __init__(self, base_url: str = BASE_URL):
         self.base_url = base_url
+        self.scraper_api_key = os.getenv("SCRAPER_API_KEY")
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
         }
+
+    def _build_url(self, target_url: str, params: Optional[Dict[str, Any]] = None, is_binary: bool = False) -> str:
+        """
+        Construye la URL final, pasando por ScraperAPI si está configurada la clave.
+        """
+        if params:
+            query_str = urllib.parse.urlencode(params)
+            sep = "&" if "?" in target_url else "?"
+            full_target = f"{target_url}{sep}{query_str}"
+        else:
+            full_target = target_url
+
+        if self.scraper_api_key:
+            encoded_target = urllib.parse.quote(full_target, safe="")
+            scraper_url = f"https://api.scraperapi.com?api_key={self.scraper_api_key}&url={encoded_target}"
+            if is_binary:
+                scraper_url += "&binary_target=true"
+            return scraper_url
+        
+        return full_target
 
     async def search_leyes(
         self,
@@ -49,9 +72,11 @@ class ISILegAPI:
         if asunto:
             params["asunto"] = asunto
 
-        url = f"{self.base_url}/ley"
+        raw_url = f"{self.base_url}/ley"
+        final_url = self._build_url(raw_url, params)
+
         async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.get(url, params=params, headers=self.headers)
+            resp = await client.get(final_url)
             resp.raise_for_status()
             return resp.json()
 
@@ -69,9 +94,11 @@ class ISILegAPI:
         """
         Obtiene el detalle completo de una norma mediante su ID.
         """
-        url = f"{self.base_url}/ley/{id_ley}"
+        raw_url = f"{self.base_url}/ley/{id_ley}"
+        final_url = self._build_url(raw_url)
+
         async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.get(url, headers=self.headers)
+            resp = await client.get(final_url)
             resp.raise_for_status()
             res = resp.json()
             return res.get("data", {})
@@ -80,9 +107,11 @@ class ISILegAPI:
         """
         Descarga el stream binario de un PDF dado su sub-path (ej. 'ley/pdfFile/6684/1').
         """
-        url = f"{self.base_url}/{pdf_path.lstrip('/')}"
-        async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
-            resp = await client.get(url, headers=self.headers)
+        raw_url = f"{self.base_url}/{pdf_path.lstrip('/')}"
+        final_url = self._build_url(raw_url, is_binary=True)
+
+        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
+            resp = await client.get(final_url)
             if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
                 return resp.content
             return None
@@ -117,8 +146,6 @@ class ISILegAPI:
         ]
         full_text = "\n".join(filter(None, text_parts))
 
-        # Regex para detectar menciones a Leyes o Decretos
-        # Ejemplos: "MODIFICADA por Ley Nº 14451", "Ley N° 12510", "Decreto Nº 1501/2026", "Decr. Nº 0287/2026"
         patterns = [
             r'(?:MODIFICAD[AO]\s+por\s+)?(Ley|Decreto\s+Ley|Decreto|Decr\.)\s+(?:N[º°\.]*\s*)?(\d+)(?:\s*/\s*(\d{2,4}))?',
             r'(?:DEROGAD[AO]\s+por\s+)?(Ley|Decreto\s+Ley|Decreto|Decr\.)\s+(?:N[º°\.]*\s*)?(\d+)(?:\s*/\s*(\d{2,4}))?',
