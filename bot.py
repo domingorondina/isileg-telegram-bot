@@ -132,13 +132,10 @@ def build_nacion_norma_card(detail: dict) -> str:
     fecha_bo = detail.get("fecha_bo") or "No disponible"
     num_bo = detail.get("numero_bo") or "-"
     sumario = detail.get("sumario") or "Sin sumario registrado"
-    has_texact = detail.get("has_texact", False)
+    observaciones = detail.get("observaciones") or ""
+    estado = detail.get("estado", "🟢 Vigente (Original)")
     modificada_por = detail.get("modificada_por_count", 0)
     modifica_a = detail.get("modifica_a_count", 0)
-
-    estado = "🟢 Vigente (Original)"
-    if has_texact:
-        estado = f"🟡 Texto Actualizado ({modificada_por} modificaciones)" if modificada_por > 0 else "🟢 Texto Actualizado"
 
     card = (
         f"🇦🇷 <b>[Nación] {html.escape(str(tipo_num))}</b>\n"
@@ -149,9 +146,15 @@ def build_nacion_norma_card(detail: dict) -> str:
     )
 
     if modifica_a > 0:
-        card += f"🔄 <b>Modifica a:</b> {modifica_a} norma(s)\n"
+        card += f"🔄 <b>Modifica o complementa a:</b> {modifica_a} norma(s)\n"
+    if modificada_por > 0:
+        card += f"⚠️ <b>Modificada/Abrogada por:</b> {modificada_por} norma(s)\n"
 
     card += f"\n📝 <b>Sumario:</b>\n<i>{html.escape(str(sumario))}</i>\n"
+
+    if observaciones:
+        card += f"\n📌 <b>Observaciones / Vigencia:</b>\n<b>{html.escape(str(observaciones))}</b>\n"
+
     return card
 
 # --- Handlers de Comandos y Mensajes ---
@@ -164,7 +167,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🏢 <b>SIN / Boletín Oficial</b>: Decretos del <b>Poder Ejecutivo de Santa Fe</b>.\n"
         "• 🇦🇷 <b>InfoLEG</b>: Leyes, Decretos y DNU de la <b>República Argentina (Nación)</b>.\n\n"
         "🔍 <b>¿Cómo buscar?</b>\n"
-        "1. <b>Por número</b>: Envía solo el número (ej. <code>14207</code>, <code>20744</code>, <code>70</code> o <code>100</code>). "
+        "1. <b>Por número</b>: Envía solo el número (ej. <code>14207</code>, <code>20744</code>, <code>10260</code>, <code>70</code> o <code>100</code>). "
         "Si existen leyes provinciales, decretos provinciales o normas nacionales con el mismo número, podrás elegir cuál ver.\n"
         "2. <b>Por tema</b>: Escribe palabras clave (ej: <code>contrato de trabajo</code>, <code>salud</code>, <code>presupuesto</code>).\n\n"
         "💡 <i>Podrás descargar PDFs oficiales, leer textos actualizados y navegar normas relacionadas.</i>"
@@ -190,7 +193,6 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         parse_mode="HTML"
     )
 
-    # Consultar las fuentes en paralelo
     try:
         sf_ley_task = isileg_api.search_leyes(numero_ley=numero, page=0, page_size=1)
         nac_ley_task = infoleg_api.search_normas(tipo_norma="1", numero=numero, limit=2)
@@ -204,7 +206,6 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         await msg.edit_text(f"⚠️ Error al consultar las bases legislativas: {html.escape(str(e))}")
         return
 
-    # Normalizar resultados
     sf_items = []
     if isinstance(sf_res, dict) and sf_res.get("data"):
         sf_items = sf_res["data"]
@@ -212,27 +213,26 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
     nac_ley_items = nac_leys if isinstance(nac_leys, list) else []
     nac_dec_items = nac_decs if isinstance(nac_decs, list) else []
 
-    # Construir menú de opciones
+    # Construir opciones del menú
     buttons = []
 
-    # 1. Opción Santa Fe - Ley Provincial (ISILeg)
+    # 1. Santa Fe - Ley Provincial
     for item in sf_items:
         id_ley = item["idLey"]
         label = f"🏛️ [Santa Fe] Ley Prov. Nº {numero}"
         buttons.append([InlineKeyboardButton(label, callback_data=f"sf:card:{id_ley}")])
 
-    # 2. Opción Santa Fe - Decreto Provincial (Poder Ejecutivo)
-    # Siempre ofrecemos la opción de consultar el Decreto Provincial homónimo
+    # 2. Santa Fe - Decreto Provincial
     label_dec_sf = f"🏢 [Santa Fe] Decreto Prov. Nº {numero}"
     buttons.append([InlineKeyboardButton(label_dec_sf, callback_data=f"sfdec:card:{numero}")])
 
-    # 3. Opciones Nación - Leyes
+    # 3. Nación - Leyes
     for item in nac_ley_items:
         nid = item["id"]
         label = f"🇦🇷 [Nación] Ley Nac. Nº {numero}"
         buttons.append([InlineKeyboardButton(label, callback_data=f"nac:card:{nid}")])
 
-    # 4. Opciones Nación - Decretos
+    # 4. Nación - Decretos
     for item in nac_dec_items:
         nid = item["id"]
         tipo_lbl = item.get("tipo_numero", f"Decreto {numero}")
@@ -298,13 +298,13 @@ async def show_nacion_norma_card(target_msg, id_norma: str):
         row1 = []
         if detail.get("has_texact"):
             row1.append(InlineKeyboardButton("📖 Texto Actualizado", callback_data=f"nac:txt:act:{id_norma}"))
-        row1.append(InlineKeyboardButton("📜 Texto Original", callback_data=f"nac:txt:orig:{id_norma}"))
+        row1.append(InlineKeyboardButton("📜 Ver Texto Completo", callback_data=f"nac:txt:orig:{id_norma}"))
         buttons.append(row1)
 
         row2 = []
-        mod_count = detail.get("modificada_por_count", 0)
-        if mod_count > 0:
-            row2.append(InlineKeyboardButton(f"🔗 Modificaciones ({mod_count})", callback_data=f"nac:rel:{id_norma}"))
+        total_mod = detail.get("modificada_por_count", 0) + detail.get("modifica_a_count", 0)
+        if total_mod > 0:
+            row2.append(InlineKeyboardButton(f"🔗 Modificaciones / Vínculos ({total_mod})", callback_data=f"nac:rel:{id_norma}"))
         row2.append(InlineKeyboardButton("🌐 Ver en InfoLEG", url=detail.get("url_infoleg")))
         buttons.append(row2)
 
@@ -415,7 +415,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("⚠️ No se pudo descargar el archivo PDF solicitado.")
         return
 
-    # 3. Textos y Modificaciones de Nación
+    # 3. Textos de Nación
     elif data.startswith("nac:txt:"):
         parts = data.split(":")
         tipo_txt = parts[2]
@@ -429,7 +429,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if texto:
             detail = await infoleg_api.get_norma_detail(nid)
             titulo = detail.get("tipo_numero", f"Norma {nid}")
-            tag = "Texto Actualizado" if prefer_act else "Texto Original"
+            tag = "Texto Actualizado" if prefer_act else "Texto Completo"
 
             if len(texto) <= 3500:
                 await query.message.reply_text(
@@ -449,19 +449,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("⚠️ No se pudo recuperar el texto de la norma.")
         return
 
-    # 4. Modificaciones / Vínculos de Nación
+    # 4. Modificaciones / Vínculos de Nación (modo 1 y modo 2 unificados)
     elif data.startswith("nac:rel:"):
         nid = data.split(":")[2]
-        status_msg = await query.message.reply_text("⏳ Consultando modificaciones en InfoLEG...")
-        vincs = await infoleg_api.get_vinculos(nid, modo=2)
+        status_msg = await query.message.reply_text("⏳ Consultando modificaciones y vínculos en InfoLEG...")
+        v1_task = infoleg_api.get_vinculos(nid, modo=1)
+        v2_task = infoleg_api.get_vinculos(nid, modo=2)
+        v1, v2 = await asyncio.gather(v1_task, v2_task, return_exceptions=True)
         await status_msg.delete()
 
-        if vincs:
-            msg_text = f"🔗 <b>Normas que modifican/reglamentan a esta norma ({len(vincs)}):</b>\n\n"
-            for v in vincs[:10]:
-                msg_text += f"• <b>{html.escape(v['tipo_numero'])}</b> ({html.escape(v['fecha'])}): {html.escape(v['asunto'][:60])}...\n"
-            if len(vincs) > 10:
-                msg_text += f"\n<i>...y {len(vincs)-10} modificaciones más en InfoLEG.</i>"
+        v1_list = v1 if isinstance(v1, list) else []
+        v2_list = v2 if isinstance(v2, list) else []
+
+        if v1_list or v2_list:
+            msg_text = f"🔗 <b>Genealogía Normativa y Modificaciones (InfoLEG):</b>\n\n"
+            if v1_list:
+                msg_text += f"🔄 <b>Normas que esta norma modifica/complementa ({len(v1_list)}):</b>\n"
+                for v in v1_list[:6]:
+                    tipo_limpio = " ".join(v['tipo_numero'].split())
+                    msg_text += f"• <b>{html.escape(tipo_limpio)}</b> ({html.escape(v['fecha'])}): {html.escape(v['descripcion'][:60])}\n"
+                msg_text += "\n"
+            if v2_list:
+                msg_text += f"⚠️ <b>Normas que modifican/abrogan/reglamentan a esta norma ({len(v2_list)}):</b>\n"
+                for v in v2_list[:6]:
+                    tipo_limpio = " ".join(v['tipo_numero'].split())
+                    msg_text += f"• <b>{html.escape(tipo_limpio)}</b> ({html.escape(v['fecha'])}): {html.escape(v['descripcion'][:60])}\n"
+            
             await query.message.reply_text(msg_text, parse_mode="HTML")
         else:
             await query.message.reply_text("ℹ️ No se registraron modificaciones para esta norma.")
@@ -493,7 +506,7 @@ def main():
     port = int(os.getenv("PORT", "8080"))
     threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
 
-    logger.info("Iniciando Bot Legislativo Unificado (Santa Fe Legislativo + Santa Fe Ejecutivo + Nación)...")
+    logger.info("Iniciando Bot Legislativo Unificado...")
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
