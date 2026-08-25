@@ -76,26 +76,44 @@ class InfoLegAPI:
                     seen_ids.add(norma_id)
 
                     parent_tr = a.find_parent("tr")
-                    cells = parent_tr.find_all("td") if parent_tr else []
+                    cells = parent_tr.find_all(["td", "th"]) if parent_tr else []
                     
-                    if len(cells) >= 4:
-                        tipo_num = cells[0].get_text(" ", strip=True)
-                        emisor = cells[1].get_text(" ", strip=True)
-                        fecha_bo = cells[2].get_text(" ", strip=True)
-                        sumario = cells[3].get_text(" ", strip=True)
-                    else:
-                        tipo_num = a.get_text(" ", strip=True)
-                        emisor = "Poder Ejecutivo / Congreso Nacional"
-                        fecha_bo = ""
-                        sumario = parent_tr.get_text(" ", strip=True) if parent_tr else tipo_num
+                    raw_tipo = a.get_text(" ", strip=True)
+                    tipo_num = " ".join(raw_tipo.split())
+                    emisor = "Poder Ejecutivo / Congreso Nacional"
+                    fecha_bo = ""
+                    sumario = ""
+
+                    if len(cells) >= 3:
+                        c0 = " ".join(cells[0].get_text(" ", strip=True).split())
+                        c1 = " ".join(cells[1].get_text(" ", strip=True).split())
+                        c2 = " ".join(cells[2].get_text(" ", strip=True).split())
+
+                        # Ignorar encabezados
+                        if "Número" in c0 and "Descripción" in c2:
+                            continue
+
+                        tipo_num = " ".join(a.get_text(" ", strip=True).split())
+                        if not tipo_num:
+                            tipo_num = c0
+                        
+                        fecha_bo = c1 if c1 != "------" else ""
+                        sumario = c2
+                    elif len(cells) == 2:
+                        sumario = " ".join(cells[1].get_text(" ", strip=True).split())
+
+                    # Extraer año del texto o fecha si está disponible
+                    year_match = re.search(r"/ (\d{4})", tipo_num)
+                    year_str = year_match.group(1) if year_match else ""
 
                     results.append({
                         "id": norma_id,
                         "jurisdiccion": "Nación",
                         "tipo_numero": tipo_num,
+                        "year": year_str,
                         "emisor": emisor,
                         "fecha_bo": fecha_bo,
-                        "sumario": sumario,
+                        "sumario": sumario or "Sin descripción registrada",
                         "url_infoleg": f"{self.base_url}/verNorma.do?id={norma_id}"
                     })
 
@@ -169,7 +187,7 @@ class InfoLegAPI:
         return {
             "id": id_norma,
             "jurisdiccion": "Nación",
-            "tipo_numero": tipo_numero,
+            "tipo_numero": " ".join(tipo_numero.split()),
             "emisor": emisor,
             "fecha_sancion": fecha_sancion,
             "fecha_bo": fecha_bo,
@@ -201,11 +219,10 @@ class InfoLegAPI:
         for tr in soup.find_all("tr"):
             cells = tr.find_all(["td", "th"])
             if len(cells) >= 3:
-                c0 = cells[0].get_text(" ", strip=True)
-                c1 = cells[1].get_text(" ", strip=True)
-                c2 = cells[2].get_text(" ", strip=True)
+                c0 = " ".join(cells[0].get_text(" ", strip=True).split())
+                c1 = " ".join(cells[1].get_text(" ", strip=True).split())
+                c2 = " ".join(cells[2].get_text(" ", strip=True).split())
                 
-                # Ignorar encabezados
                 if "Número" in c0 or "Fecha" in c1:
                     continue
 
