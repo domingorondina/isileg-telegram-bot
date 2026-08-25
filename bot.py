@@ -1,7 +1,7 @@
 """
 Bot de Telegram Unificado para Información Legislativa:
-- 🏛️ ISILeg (Poder Legislativo - Provincia de Santa Fe)
-- 🏢 SIN (Poder Ejecutivo - Provincia de Santa Fe & Boletín Oficial)
+- 🏛️ ISILeg (Poder Legislativo y Decretos Provinciales - Santa Fe)
+- 🏢 SIN & Boletín Oficial de Santa Fe
 - 🇦🇷 InfoLEG (República Argentina / Nivel Federal)
 
 Desarrollado para Domingo Rondina por Antigravity.
@@ -82,8 +82,16 @@ def run_health_server(port: int = 8080):
 
 # --- Formateadores de Mensajes ---
 
+def extract_year_from_dates(*dates) -> str:
+    for d in dates:
+        if d:
+            m = re.search(r"(\d{4})", str(d))
+            if m:
+                return m.group(1)
+    return ""
+
 def build_sf_ley_card(detail: dict) -> str:
-    """Construye la tarjeta de una Ley de Santa Fe (ISILeg)."""
+    """Construye la tarjeta de una Ley o Decreto de Santa Fe (ISILeg)."""
     num_ley = detail.get("numeroLey", "S/N")
     asunto = detail.get("asunto") or "Sin asunto registrado"
     fecha_sancion = detail.get("fechaSancion") or "No disponible"
@@ -91,6 +99,13 @@ def build_sf_ley_card(detail: dict) -> str:
     fecha_bo = detail.get("fechaPublicacionBo") or "No disponible"
     num_bo = detail.get("numeroBo") or "-"
     num_exp = detail.get("numeroExpediente") or "-"
+
+    tipo_norma = "Ley Provincial"
+    tipo_id = detail.get("tipoLey") or detail.get("tipo", 1)
+    if str(tipo_id) == "3" or "decreto" in str(detail.get("texto", "")).lower():
+        tipo_norma = "Decreto Provincial"
+    elif str(tipo_id) == "2":
+        tipo_norma = "Decreto Ley Provincial"
 
     estado = "🟢 Vigente"
     comentario = detail.get("comentario") or ""
@@ -100,31 +115,23 @@ def build_sf_ley_card(detail: dict) -> str:
         estado = "🟡 Modificada"
 
     card = (
-        f"🏛️ <b>[Santa Fe - Legislatura] Ley Provincial Nº {html.escape(str(num_ley))}</b>\n"
+        f"🏛️ <b>[Santa Fe] {tipo_norma} Nº {html.escape(str(num_ley))}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📋 <b>Estado:</b> {estado}\n"
-        f"📅 <b>Sanción:</b> {html.escape(str(fecha_sancion))}\n"
-        f"📜 <b>Promulgación:</b> {html.escape(str(fecha_prom))}\n"
-        f"📰 <b>Boletín Oficial:</b> {html.escape(str(fecha_bo))} (B.O. Nº {html.escape(str(num_bo))})\n"
-        f"📁 <b>Expediente:</b> {html.escape(str(num_exp))}\n\n"
-        f"📝 <b>Asunto:</b>\n<i>{html.escape(str(asunto))}</i>\n"
+        f"📅 <b>Fecha / Sanción:</b> {html.escape(str(fecha_sancion))}\n"
     )
+    if fecha_prom != "No disponible" and fecha_prom:
+        card += f"📜 <b>Promulgación:</b> {html.escape(str(fecha_prom))}\n"
+    if fecha_bo != "No disponible" and fecha_bo:
+        card += f"📰 <b>Boletín Oficial:</b> {html.escape(str(fecha_bo))} (B.O. Nº {html.escape(str(num_bo))})\n"
+    if num_exp != "-":
+        card += f"📁 <b>Expediente:</b> {html.escape(str(num_exp))}\n"
+
+    card += f"\n📝 <b>Asunto:</b>\n<i>{html.escape(str(asunto))}</i>\n"
 
     if comentario:
         card += f"\n📌 <b>Notas / Modificaciones:</b>\n{html.escape(str(comentario))[:400]}\n"
 
-    return card
-
-def build_sf_decreto_card(numero: str, anio: str = "") -> str:
-    """Construye la tarjeta de un Decreto de Santa Fe (Poder Ejecutivo)."""
-    decreto_title = f"Decreto Provincial Nº {numero}/{anio}" if anio else f"Decreto Provincial Nº {numero}"
-    card = (
-        f"🏢 <b>[Santa Fe - Poder Ejecutivo] {html.escape(decreto_title)}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🏛️ <b>Emisor:</b> Poder Ejecutivo de la Provincia de Santa Fe (Gobernador y Ministros)\n"
-        f"📋 <b>Numeración Anual:</b> Los decretos provinciales se numeran correlativamente en cada año calendario.\n\n"
-        f"💡 <i>Puedes consultar la edición del Boletín Oficial o acceder al portal SIN del Gobierno Provincial para ver el texto completo de este decreto.</i>\n"
-    )
     return card
 
 def build_nacion_norma_card(detail: dict) -> str:
@@ -166,11 +173,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "👋 <b>Bienvenido al Asistente Legislativo Argentino Integral</b>\n\n"
         "Este bot consulta en tiempo real tres fuentes jurídicas oficiales:\n"
-        "• 🏛️ <b>ISILeg</b>: Leyes del <b>Poder Legislativo de Santa Fe</b>.\n"
-        "• 🏢 <b>SIN / Boletín Oficial</b>: Decretos del <b>Poder Ejecutivo de Santa Fe</b>.\n"
+        "• 🏛️ <b>ISILeg</b>: Leyes y Decretos de la <b>Provincia de Santa Fe</b>.\n"
+        "• 🏢 <b>SIN / Boletín Oficial</b>: Actos y Decretos del <b>Poder Ejecutivo de Santa Fe</b>.\n"
         "• 🇦🇷 <b>InfoLEG</b>: Leyes, Decretos y DNU de la <b>República Argentina (Nación)</b>.\n\n"
         "🔍 <b>¿Cómo buscar?</b>\n"
-        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>10260</code>) o número con año (ej. <code>70/2023</code>, <code>4990/1971</code>).\n"
+        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>2751</code>, <code>10260</code>) o número con año (ej. <code>2751/2008</code>, <code>70/2023</code>).\n"
         "2. <b>Por tema</b>: Escribe palabras clave (ej: <code>contrato de trabajo</code>, <code>salud</code>, <code>presupuesto</code>).\n\n"
         "💡 <i>Podrás descargar PDFs oficiales, leer textos actualizados y navegar genealogías legislativas.</i>"
     )
@@ -181,7 +188,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
-    # Verificar si es un patrón de número de norma o número/año (ej: "4990", "70/2023", "14.207")
     norma_match = re.match(r"^(\d{1,6})(?:\s*[/–-]\s*(\d{2,4}))?$", text.replace(".", ""))
     if norma_match:
         numero = norma_match.group(1)
@@ -197,54 +203,74 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_unified_number_search(update: Update, context: ContextTypes.DEFAULT_TYPE, numero: str, anio: str = ""):
     busqueda_desc = f"Nº {numero}/{anio}" if anio else f"Nº {numero}"
     msg = await update.message.reply_text(
-        f"🔍 Buscando <b>{html.escape(busqueda_desc)}</b> en <b>Santa Fe (Legislativo & Ejecutivo)</b> y <b>Nación</b>...",
+        f"🔍 Buscando <b>{html.escape(busqueda_desc)}</b> en <b>Santa Fe</b> y <b>Nación</b>...",
         parse_mode="HTML"
     )
 
     try:
-        sf_ley_task = isileg_api.search_leyes(numero_ley=numero, page=0, page_size=1)
+        # Consultar en paralelo:
+        # 1. Santa Fe - Leyes (tipo_ley=1)
+        sf_ley_task = isileg_api.search_leyes(numero_ley=numero, tipo_ley=1, page=0, page_size=2)
+        # 2. Santa Fe - Decretos Provinciales (tipo_ley=3)
+        sf_dec_task = isileg_api.search_leyes(numero_ley=numero, tipo_ley=3, page=0, page_size=5)
+        # 3. Nación - Leyes
         nac_ley_task = infoleg_api.search_normas(tipo_norma="1", numero=numero, anio_sancion=anio, limit=3)
+        # 4. Nación - Decretos
         nac_dec_task = infoleg_api.search_normas(tipo_norma="2", numero=numero, anio_sancion=anio, limit=5)
 
-        sf_res, nac_leys, nac_decs = await asyncio.gather(
-            sf_ley_task, nac_ley_task, nac_dec_task, return_exceptions=True
+        sf_leys, sf_decs, nac_leys, nac_decs = await asyncio.gather(
+            sf_ley_task, sf_dec_task, nac_ley_task, nac_dec_task, return_exceptions=True
         )
     except Exception as e:
         logger.error(f"Error en búsqueda paralela: {e}")
         await msg.edit_text(f"⚠️ Error al consultar las bases legislativas: {html.escape(str(e))}")
         return
 
-    sf_items = []
-    if isinstance(sf_res, dict) and sf_res.get("data"):
-        # Las leyes provinciales tienen numeración única
-        if not anio:
-            sf_items = sf_res["data"]
-        else:
-            # Si se especificó año, filtrar si coincide el año de sanción/promulgación
-            for item in sf_res["data"]:
-                fechas = f"{item.get('fechaSancion','')} {item.get('fechaPromulgacion','')}"
-                if anio in fechas:
-                    sf_items.append(item)
+    # Normalizar resultados Santa Fe
+    sf_ley_items = []
+    if isinstance(sf_leys, dict) and sf_leys.get("data"):
+        for it in sf_leys["data"]:
+            y = extract_year_from_dates(it.get("fechaSancion"), it.get("fechaPromulgacion"))
+            if not anio or (anio and y == anio):
+                it["_year"] = y
+                sf_ley_items.append(it)
+
+    sf_dec_items = []
+    if isinstance(sf_decs, dict) and sf_decs.get("data"):
+        for it in sf_decs["data"]:
+            y = extract_year_from_dates(it.get("fechaSancion"), it.get("fechaPromulgacion"))
+            if not anio or (anio and y == anio):
+                it["_year"] = y
+                sf_dec_items.append(it)
 
     nac_ley_items = nac_leys if isinstance(nac_leys, list) else []
     nac_dec_items = nac_decs if isinstance(nac_decs, list) else []
 
-    # Construir opciones del menú
+    total_opciones = len(sf_ley_items) + len(sf_dec_items) + len(nac_ley_items) + len(nac_dec_items)
+
+    if total_opciones == 0:
+        await msg.edit_text(
+            f"❌ No se encontró ninguna norma con el {html.escape(busqueda_desc)} en Santa Fe ni en Nación.",
+            parse_mode="HTML"
+        )
+        return
+
+    # Construir opciones del menú con año explícito
     buttons = []
 
-    # 1. Santa Fe - Ley Provincial (ISILeg)
-    for item in sf_items:
+    # 1. Santa Fe - Leyes Provinciales
+    for item in sf_ley_items:
         id_ley = item["idLey"]
-        label = f"🏛️ [Santa Fe] Ley Prov. Nº {numero}"
+        y_str = f" ({item['_year']})" if item.get("_year") else ""
+        label = f"🏛️ [Santa Fe] Ley Prov. Nº {numero}{y_str}"
         buttons.append([InlineKeyboardButton(label, callback_data=f"sf:card:{id_ley}")])
 
-    # 2. Santa Fe - Decreto Provincial (SIN / Ejecutivo)
-    if anio:
-        label_dec_sf = f"🏢 [Santa Fe] Decreto Prov. Nº {numero}/{anio}"
-        buttons.append([InlineKeyboardButton(label_dec_sf, callback_data=f"sfdec:card:{numero}:{anio}")])
-    else:
-        label_dec_sf = f"🏢 [Santa Fe] Decreto Prov. Nº {numero}"
-        buttons.append([InlineKeyboardButton(label_dec_sf, callback_data=f"sfdec:card:{numero}:")])
+    # 2. Santa Fe - Decretos Provinciales (con año exacto de cada decreto)
+    for item in sf_dec_items:
+        id_ley = item["idLey"]
+        y_str = f" / {item['_year']}" if item.get("_year") else ""
+        label = f"🏢 [Santa Fe] Decreto Prov. Nº {numero}{y_str}"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"sf:card:{id_ley}")])
 
     # 3. Nación - Leyes
     for item in nac_ley_items:
@@ -294,21 +320,6 @@ async def show_sf_ley_card(target_msg, id_ley: int):
     except Exception as e:
         logger.error(f"Error mostrando tarjeta Santa Fe {id_ley}: {e}")
         await target_msg.edit_text(f"⚠️ Error al cargar detalle de Santa Fe: {html.escape(str(e))}")
-
-async def show_sf_decreto_card(target_msg, numero: str, anio: str = ""):
-    try:
-        card_text = build_sf_decreto_card(numero, anio)
-        buttons = [
-            [
-                InlineKeyboardButton("📰 Boletín Oficial de Santa Fe", url="https://www.santafe.gob.ar/boletinoficial/"),
-                InlineKeyboardButton("🌐 Portal SIN Santa Fe", url="https://www.santafe.gov.ar/normativa/"),
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(buttons)
-        await target_msg.edit_text(card_text, reply_markup=reply_markup, parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Error mostrando decreto Santa Fe {numero}: {e}")
-        await target_msg.edit_text(f"⚠️ Error al cargar decreto de Santa Fe: {html.escape(str(e))}")
 
 async def show_nacion_norma_card(target_msg, id_norma: str):
     try:
@@ -396,12 +407,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         id_ley = int(data.split(":")[2])
         await show_sf_ley_card(query.message, id_ley)
         return
-    elif data.startswith("sfdec:card:"):
-        parts = data.split(":")
-        num_dec = parts[2]
-        anio_dec = parts[3] if len(parts) > 3 else ""
-        await show_sf_decreto_card(query.message, num_dec, anio_dec)
-        return
     elif data.startswith("nac:card:"):
         nid = data.split(":")[2]
         await show_nacion_norma_card(query.message, nid)
@@ -428,12 +433,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.delete()
 
         if pdf_bytes:
-            filename = f"SantaFe_Ley_{id_ley}_{pdf_type}.pdf"
+            filename = f"SantaFe_Norma_{id_ley}_{pdf_type}.pdf"
             await context.bot.send_document(
                 chat_id=chat_id,
                 document=io.BytesIO(pdf_bytes),
                 filename=filename,
-                caption=f"📄 Documento Oficial de Santa Fe (Ley ID {id_ley})"
+                caption=f"📄 Documento Oficial de Santa Fe (ID {id_ley})"
             )
         else:
             await query.message.reply_text("⚠️ No se pudo descargar el archivo PDF solicitado.")
