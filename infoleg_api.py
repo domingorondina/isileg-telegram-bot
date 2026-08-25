@@ -114,30 +114,24 @@ class InfoLegAPI:
             content = resp.content.decode("ISO-8859-1", errors="ignore")
 
         soup = BeautifulSoup(content, "html.parser")
-
-        # Parse main text
         all_text = soup.get_text("\n", strip=True)
         
-        # Calculate static URLs
         nid = int(id_norma)
         r_start = (nid // 5000) * 5000
         r_end = r_start + 4999
         url_original = f"{self.base_url}/anexos/{r_start}-{r_end}/{nid}/norma.htm"
         url_actualizado = f"{self.base_url}/anexos/{r_start}-{r_end}/{nid}/texact.htm"
 
-        # Check if texact link is present in page
         has_texact = bool(soup.find("a", href=re.compile(r"texact\.htm", re.I)))
 
-        # Extract title and details from table
-        rows = soup.find_all("tr")
         sumario = ""
+        observaciones = ""
         emisor = "Honorable Congreso de la Nación Argentina"
         fecha_sancion = ""
         fecha_bo = ""
         numero_bo = ""
         tipo_numero = f"Norma Nacional Nº {id_norma}"
 
-        # Clean extraction
         lines = [l.strip() for l in all_text.split("\n") if l.strip()]
         for idx, line in enumerate(lines):
             if "Ley" in line or "Decreto" in line or "Resolución" in line or "Disposición" in line:
@@ -147,12 +141,13 @@ class InfoLegAPI:
                     tipo_numero = line
             if "Resumen:" in line and idx + 1 < len(lines):
                 sumario = lines[idx+1]
+            if "Observaciones:" in line and idx + 1 < len(lines):
+                observaciones = lines[idx+1]
             if "Boletín Oficial del" in line and idx + 1 < len(lines):
                 fecha_bo = lines[idx+1]
             if "Número:" in line and idx + 1 < len(lines) and lines[idx+1].isdigit():
                 numero_bo = lines[idx+1]
 
-        # Extract modification links
         modifica_a_count = 0
         modificada_por_count = 0
         for a in soup.find_all("a", href=True):
@@ -164,6 +159,13 @@ class InfoLegAPI:
                     m = re.search(r"(\d+)", a.get_text())
                     if m: modificada_por_count = int(m.group(1))
 
+        # Estado de vigencia
+        estado = "🟢 Vigente (Original)"
+        if observaciones and ("abrogad" in observaciones.lower() or "derogad" in observaciones.lower()):
+            estado = "🔴 Abrogada / Derogada"
+        elif has_texact:
+            estado = f"🟡 Texto Actualizado ({modificada_por_count} modificaciones)" if modificada_por_count > 0 else "🟢 Texto Actualizado"
+
         return {
             "id": id_norma,
             "jurisdiccion": "Nación",
@@ -173,6 +175,8 @@ class InfoLegAPI:
             "fecha_bo": fecha_bo,
             "numero_bo": numero_bo,
             "sumario": sumario or "Sin sumario registrado",
+            "observaciones": observaciones,
+            "estado": estado,
             "url_infoleg": url,
             "url_original": url_original,
             "url_actualizado": url_actualizado if has_texact else None,
@@ -194,48 +198,64 @@ class InfoLegAPI:
         soup = BeautifulSoup(content, "html.parser")
         vinculos = []
 
-        for a in soup.find_all("a", href=re.compile(r"verNorma\.do")):
-            tr = a.find_parent("tr")
-            if tr:
-                cells = tr.find_all("td")
-                if len(cells) >= 4:
-                    tipo_num = cells[0].get_text(" ", strip=True)
-                    emisor = cells[1].get_text(" ", strip=True)
-                    fecha = cells[2].get_text(" ", strip=True)
-                    asunto = cells[3].get_text(" ", strip=True)
-                    match = re.search(r"id=(\d+)", a["href"])
-                    nid = match.group(1) if match else ""
-                    vinculos.append({
-                        "id": nid,
-                        "tipo_numero": tipo_num,
-                        "emisor": emisor,
-                        "fecha": fecha,
-                        "asunto": asunto
-                    })
+        for tr in soup.find_all("tr"):
+            cells = tr.find_all(["td", "th"])
+            if len(cells) >= 3:
+                c0 = cells[0].get_text(" ", strip=True)
+                c1 = cells[1].get_text(" ", strip=True)
+                c2 = cells[2].get_text(" ", strip=True)
+                
+                # Ignorar encabezados
+                if "Número" in c0 or "Fecha" in c1:
+                    continue
+
+                a_tag = tr.find("a", href=re.compile(r"verNorma\.do"))
+                nid = ""
+                if a_tag:
+                    match = re.search(r"id=(\d+)", a_tag["href"])
+                    if match:
+                        nid = match.group(1)
+
+                vinculos.append({
+                    "id": nid,
+                    "tipo_numero": c0,
+                    "fecha": c1,
+                    "descripcion": c2
+                })
         return vinculos
 
     async def get_texto_limpio(self, id_norma: str, prefer_actualizado: bool = True) -> Optional[str]:
         """
         Descarga el HTML de la norma y extrae el texto formateado en texto plano limpio.
+        Si no hay archivo HTML externo (leyes históricas), genera el resumen estructurado de la norma.
         """
         detail = await self.get_norma_detail(id_norma)
         target_url = detail.get("url_actualizado") if (prefer_actualizado and detail.get("has_texact")) else detail.get("url_original")
         
-        if not target_url:
-            target_url = detail.get("url_original")
+        if target_url:
+            try:
+                async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
+                    resp = await client.get(target_url)
+                    if resp.status_code == 200 and len(resp.content) > 100:
+                        content = resp.content.decode("ISO-8859-1", errors="ignore")
+                        soup = BeautifulSoup(content, "html.parser")
+                        for tag in soup(["script", "style", "nav", "header", "footer"]):
+                            tag.decompose()
+                        text = soup.get_text("\n", strip=True)
+                        clean_text = re.sub(r"\n{3,}", "\n\n", text)
+                        return clean_text
+            except Exception:
+                pass
 
-        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.get(target_url)
-            if resp.status_code != 200:
-                return None
-            content = resp.content.decode("ISO-8859-1", errors="ignore")
+        # Fallback: Construir texto descriptivo completo desde la ficha de InfoLEG
+        fallback_text = (
+            f"{detail.get('tipo_numero')}\n"
+            f"Emisor: {detail.get('emisor')}\n"
+            f"Boletín Oficial: {detail.get('fecha_bo')} (B.O. Nº {detail.get('numero_bo')})\n"
+            f"Estado: {detail.get('estado')}\n\n"
+            f"SUMARIO:\n{detail.get('sumario')}\n"
+        )
+        if detail.get("observaciones"):
+            fallback_text += f"\nOBSERVACIONES:\n{detail.get('observaciones')}\n"
 
-        soup = BeautifulSoup(content, "html.parser")
-        # Eliminar scripts y estilos
-        for tag in soup(["script", "style", "nav", "header", "footer"]):
-            tag.decompose()
-
-        text = soup.get_text("\n", strip=True)
-        # Limpiar saltos de línea excesivos
-        clean_text = re.sub(r"\n{3,}", "\n\n", text)
-        return clean_text
+        return fallback_text
