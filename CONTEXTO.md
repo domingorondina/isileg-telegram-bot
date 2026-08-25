@@ -1,7 +1,11 @@
 # Contexto y Documentación Técnica: ISILeg Web (Senado Santa Fe)
 
-**URL Oficial**: https://isilegweb.senadosantafe.gob.ar/  
-**Bot de Telegram**: [@isileg_bot](https://t.me/isileg_bot) (Estado: Listo y configurado para despliegue en Render)  
+**URL Oficial ISILeg**: https://isilegweb.senadosantafe.gob.ar/  
+**Bot de Telegram**: [@isileg_bot](https://t.me/isileg_bot)  
+**Estado Cloud**: 🟢 **LIVE en Render 24/7**  
+**Dashboard Render**: [https://dashboard.render.com/web/srv-da6r8sh0er6s73d699pg](https://dashboard.render.com/web/srv-da6r8sh0er6s73d699pg)  
+**URL Pública Health Check**: [https://isileg-telegram-bot.onrender.com](https://isileg-telegram-bot.onrender.com)  
+**Repositorio GitHub**: [https://github.com/domingorondina/isileg-telegram-bot](https://github.com/domingorondina/isileg-telegram-bot)  
 **Última Actualización**: 2026-08-25  
 **Conversation ID**: `e83ef439-f27f-4b62-bcdb-ef3b01dcdbab`
 
