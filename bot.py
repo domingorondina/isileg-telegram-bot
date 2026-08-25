@@ -1,7 +1,8 @@
 """
 Bot de Telegram Unificado para Información Legislativa:
-- ISILeg (Provincia de Santa Fe)
-- InfoLEG (República Argentina / Nivel Federal)
+- 🏛️ ISILeg (Poder Legislativo - Provincia de Santa Fe)
+- 🏢 SIN (Poder Ejecutivo - Provincia de Santa Fe & Boletín Oficial)
+- 🇦🇷 InfoLEG (República Argentina / Nivel Federal)
 
 Desarrollado para Domingo Rondina por Antigravity.
 """
@@ -26,6 +27,7 @@ from telegram.ext import (
 
 from isileg_api import ISILegAPI
 from infoleg_api import InfoLegAPI
+from santafe_sin_api import SantaFeSINAPI
 
 load_dotenv()
 
@@ -39,6 +41,7 @@ logger = logging.getLogger(__name__)
 # Instancias de API
 isileg_api = ISILegAPI()
 infoleg_api = InfoLegAPI()
+sin_api = SantaFeSINAPI()
 
 # --- Servidor HTTP para Render Health Check ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -79,7 +82,7 @@ def run_health_server(port: int = 8080):
 # --- Formateadores de Mensajes ---
 
 def build_sf_ley_card(detail: dict) -> str:
-    """Construye la tarjeta de una Ley de Santa Fe."""
+    """Construye la tarjeta de una Ley de Santa Fe (ISILeg)."""
     num_ley = detail.get("numeroLey", "S/N")
     asunto = detail.get("asunto") or "Sin asunto registrado"
     fecha_sancion = detail.get("fechaSancion") or "No disponible"
@@ -96,7 +99,7 @@ def build_sf_ley_card(detail: dict) -> str:
         estado = "🟡 Modificada"
 
     card = (
-        f"🏛️ <b>[Santa Fe] Ley Provincial Nº {html.escape(str(num_ley))}</b>\n"
+        f"🏛️ <b>[Santa Fe - Legislatura] Ley Provincial Nº {html.escape(str(num_ley))}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📋 <b>Estado:</b> {estado}\n"
         f"📅 <b>Sanción:</b> {html.escape(str(fecha_sancion))}\n"
@@ -109,6 +112,17 @@ def build_sf_ley_card(detail: dict) -> str:
     if comentario:
         card += f"\n📌 <b>Notas / Modificaciones:</b>\n{html.escape(str(comentario))[:400]}\n"
 
+    return card
+
+def build_sf_decreto_card(numero: str) -> str:
+    """Construye la tarjeta de un Decreto de Santa Fe (Poder Ejecutivo)."""
+    card = (
+        f"🏢 <b>[Santa Fe - Poder Ejecutivo] Decreto Provincial Nº {html.escape(str(numero))}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏛️ <b>Emisor:</b> Poder Ejecutivo de la Provincia de Santa Fe (Gobernación y Ministerios)\n"
+        f"📋 <b>Publicación Oficial:</b> Boletín Oficial de la Provincia de Santa Fe\n\n"
+        f"💡 <i>Puedes consultar la edición del Boletín Oficial o acceder al portal SIN del Gobierno Provincial para ver el texto completo.</i>\n"
+    )
     return card
 
 def build_nacion_norma_card(detail: dict) -> str:
@@ -144,14 +158,15 @@ def build_nacion_norma_card(detail: dict) -> str:
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
-        "👋 <b>Bienvenido al Asistente Legislativo Argentino</b>\n\n"
-        "Este bot consulta en tiempo real dos de las bases jurídicas más completas del país:\n"
-        "• 🏛️ <b>ISILeg</b>: Legislación de la <b>Provincia de Santa Fe</b>.\n"
+        "👋 <b>Bienvenido al Asistente Legislativo Argentino Integral</b>\n\n"
+        "Este bot consulta en tiempo real tres fuentes jurídicas oficiales:\n"
+        "• 🏛️ <b>ISILeg</b>: Leyes del <b>Poder Legislativo de Santa Fe</b>.\n"
+        "• 🏢 <b>SIN / Boletín Oficial</b>: Decretos del <b>Poder Ejecutivo de Santa Fe</b>.\n"
         "• 🇦🇷 <b>InfoLEG</b>: Leyes, Decretos y DNU de la <b>República Argentina (Nación)</b>.\n\n"
         "🔍 <b>¿Cómo buscar?</b>\n"
-        "1. <b>Por número</b>: Envía solo el número (ej. <code>14207</code>, <code>20744</code>, <code>26994</code> o <code>70</code>). "
-        "Si existen leyes provinciales y decretos/leyes nacionales con el mismo número, podrás elegir cuál ver.\n"
-        "2. <b>Por tema</b>: Escribe palabras clave (ej: <code>contrato de trabajo</code>, <code>bioquimicos</code>, <code>presupuesto</code>).\n\n"
+        "1. <b>Por número</b>: Envía solo el número (ej. <code>14207</code>, <code>20744</code>, <code>70</code> o <code>100</code>). "
+        "Si existen leyes provinciales, decretos provinciales o normas nacionales con el mismo número, podrás elegir cuál ver.\n"
+        "2. <b>Por tema</b>: Escribe palabras clave (ej: <code>contrato de trabajo</code>, <code>salud</code>, <code>presupuesto</code>).\n\n"
         "💡 <i>Podrás descargar PDFs oficiales, leer textos actualizados y navegar normas relacionadas.</i>"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
@@ -161,7 +176,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
-    # Si es puramente numérico (ej. "14207", "70", "20744")
     clean_num = "".join(filter(str.isdigit, text))
     if clean_num and clean_num == text.replace(".", ""):
         await handle_unified_number_search(update, context, clean_num)
@@ -172,18 +186,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_unified_number_search(update: Update, context: ContextTypes.DEFAULT_TYPE, numero: str):
     msg = await update.message.reply_text(
-        f"🔍 Buscando <b>Nº {html.escape(numero)}</b> en <b>Santa Fe (ISILeg)</b> y <b>Nación (InfoLEG)</b>...",
+        f"🔍 Buscando <b>Nº {html.escape(numero)}</b> en <b>Santa Fe (Legislativo & Ejecutivo)</b> y <b>Nación</b>...",
         parse_mode="HTML"
     )
 
-    # Consultar ambas fuentes en paralelo
+    # Consultar las fuentes en paralelo
     try:
-        sf_task = isileg_api.search_leyes(numero_ley=numero, page=0, page_size=1)
-        nac_ley_task = infoleg_api.search_normas(tipo_norma="1", numero=numero, limit=3)
-        nac_dec_task = infoleg_api.search_normas(tipo_norma="2", numero=numero, limit=3)
+        sf_ley_task = isileg_api.search_leyes(numero_ley=numero, page=0, page_size=1)
+        nac_ley_task = infoleg_api.search_normas(tipo_norma="1", numero=numero, limit=2)
+        nac_dec_task = infoleg_api.search_normas(tipo_norma="2", numero=numero, limit=2)
 
         sf_res, nac_leys, nac_decs = await asyncio.gather(
-            sf_task, nac_ley_task, nac_dec_task, return_exceptions=True
+            sf_ley_task, nac_ley_task, nac_dec_task, return_exceptions=True
         )
     except Exception as e:
         logger.error(f"Error en búsqueda paralela: {e}")
@@ -198,44 +212,27 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
     nac_ley_items = nac_leys if isinstance(nac_leys, list) else []
     nac_dec_items = nac_decs if isinstance(nac_decs, list) else []
 
-    total_opciones = len(sf_items) + len(nac_ley_items) + len(nac_dec_items)
-
-    if total_opciones == 0:
-        await msg.edit_text(
-            f"❌ No se encontró ninguna norma con el número <b>{html.escape(numero)}</b> ni en Santa Fe ni en Nación.",
-            parse_mode="HTML"
-        )
-        return
-
-    # Si hay una única coincidencia, mostramos la tarjeta directa
-    if total_opciones == 1:
-        if len(sf_items) == 1:
-            await show_sf_ley_card(msg, sf_items[0]["idLey"])
-            return
-        elif len(nac_ley_items) == 1:
-            await show_nacion_norma_card(msg, nac_ley_items[0]["id"])
-            return
-        elif len(nac_dec_items) == 1:
-            await show_nacion_norma_card(msg, nac_dec_items[0]["id"])
-            return
-
-    # Si hay múltiples coincidencias, creamos el Menú Selector
+    # Construir menú de opciones
     buttons = []
 
-    # 1. Opción Santa Fe
+    # 1. Opción Santa Fe - Ley Provincial (ISILeg)
     for item in sf_items:
         id_ley = item["idLey"]
-        asunto_short = (item.get("asunto") or "")[:40]
         label = f"🏛️ [Santa Fe] Ley Prov. Nº {numero}"
         buttons.append([InlineKeyboardButton(label, callback_data=f"sf:card:{id_ley}")])
 
-    # 2. Opciones Nación - Leyes
+    # 2. Opción Santa Fe - Decreto Provincial (Poder Ejecutivo)
+    # Siempre ofrecemos la opción de consultar el Decreto Provincial homónimo
+    label_dec_sf = f"🏢 [Santa Fe] Decreto Prov. Nº {numero}"
+    buttons.append([InlineKeyboardButton(label_dec_sf, callback_data=f"sfdec:card:{numero}")])
+
+    # 3. Opciones Nación - Leyes
     for item in nac_ley_items:
         nid = item["id"]
         label = f"🇦🇷 [Nación] Ley Nac. Nº {numero}"
         buttons.append([InlineKeyboardButton(label, callback_data=f"nac:card:{nid}")])
 
-    # 3. Opciones Nación - Decretos
+    # 4. Opciones Nación - Decretos
     for item in nac_dec_items:
         nid = item["id"]
         tipo_lbl = item.get("tipo_numero", f"Decreto {numero}")
@@ -249,7 +246,7 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
     )
     await msg.edit_text(menu_text, reply_markup=reply_markup, parse_mode="HTML")
 
-# --- Renderizado de Tarjeta Santa Fe ---
+# --- Renderizado de Tarjetas ---
 
 async def show_sf_ley_card(target_msg, id_ley: int):
     try:
@@ -277,7 +274,20 @@ async def show_sf_ley_card(target_msg, id_ley: int):
         logger.error(f"Error mostrando tarjeta Santa Fe {id_ley}: {e}")
         await target_msg.edit_text(f"⚠️ Error al cargar detalle de Santa Fe: {html.escape(str(e))}")
 
-# --- Renderizado de Tarjeta Nación ---
+async def show_sf_decreto_card(target_msg, numero: str):
+    try:
+        card_text = build_sf_decreto_card(numero)
+        buttons = [
+            [
+                InlineKeyboardButton("📰 Boletín Oficial de Santa Fe", url="https://www.santafe.gob.ar/boletinoficial/"),
+                InlineKeyboardButton("🌐 Portal SIN Santa Fe", url="https://www.santafe.gov.ar/normativa/"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await target_msg.edit_text(card_text, reply_markup=reply_markup, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error mostrando decreto Santa Fe {numero}: {e}")
+        await target_msg.edit_text(f"⚠️ Error al cargar decreto de Santa Fe: {html.escape(str(e))}")
 
 async def show_nacion_norma_card(target_msg, id_norma: str):
     try:
@@ -313,8 +323,8 @@ async def handle_search_by_topic(update: Update, context: ContextTypes.DEFAULT_T
     )
 
     try:
-        sf_task = isileg_api.search_leyes(palabras_clave=query, page=0, page_size=4)
-        nac_task = infoleg_api.search_normas(tipo_norma="", texto=query, limit=4)
+        sf_task = isileg_api.search_leyes(palabras_clave=query, page=0, page_size=3)
+        nac_task = infoleg_api.search_normas(tipo_norma="", texto=query, limit=3)
 
         sf_res, nac_res = await asyncio.gather(sf_task, nac_task, return_exceptions=True)
     except Exception as e:
@@ -364,6 +374,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         id_ley = int(data.split(":")[2])
         await show_sf_ley_card(query.message, id_ley)
         return
+    elif data.startswith("sfdec:card:"):
+        num_dec = data.split(":")[2]
+        await show_sf_decreto_card(query.message, num_dec)
+        return
     elif data.startswith("nac:card:"):
         nid = data.split(":")[2]
         await show_nacion_norma_card(query.message, nid)
@@ -404,7 +418,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 3. Textos y Modificaciones de Nación
     elif data.startswith("nac:txt:"):
         parts = data.split(":")
-        tipo_txt = parts[2] # act u orig
+        tipo_txt = parts[2]
         nid = parts[3]
         prefer_act = (tipo_txt == "act")
 
@@ -423,7 +437,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML"
                 )
             else:
-                # Enviar como archivo de texto adjunto para normas largas
                 txt_bytes = texto.encode("utf-8")
                 filename = f"{titulo.replace(' ', '_')}_{tag.replace(' ', '_')}.txt"
                 await context.bot.send_document(
@@ -477,11 +490,10 @@ def main():
         logger.error("TELEGRAM_BOT_TOKEN no configurado.")
         return
 
-    # Iniciar Health Check Server en hilo secundario para Render
     port = int(os.getenv("PORT", "8080"))
     threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
 
-    logger.info("Iniciando Bot Legislativo Unificado (Santa Fe + Nación)...")
+    logger.info("Iniciando Bot Legislativo Unificado (Santa Fe Legislativo + Santa Fe Ejecutivo + Nación)...")
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
