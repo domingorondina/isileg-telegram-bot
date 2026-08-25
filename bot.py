@@ -12,6 +12,7 @@ import io
 import html
 import asyncio
 import logging
+import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 from dotenv import load_dotenv
@@ -114,20 +115,22 @@ def build_sf_ley_card(detail: dict) -> str:
 
     return card
 
-def build_sf_decreto_card(numero: str) -> str:
+def build_sf_decreto_card(numero: str, anio: str = "") -> str:
     """Construye la tarjeta de un Decreto de Santa Fe (Poder Ejecutivo)."""
+    decreto_title = f"Decreto Provincial Nº {numero}/{anio}" if anio else f"Decreto Provincial Nº {numero}"
     card = (
-        f"🏢 <b>[Santa Fe - Poder Ejecutivo] Decreto Provincial Nº {html.escape(str(numero))}</b>\n"
+        f"🏢 <b>[Santa Fe - Poder Ejecutivo] {html.escape(decreto_title)}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🏛️ <b>Emisor:</b> Poder Ejecutivo de la Provincia de Santa Fe (Gobernación y Ministerios)\n"
-        f"📋 <b>Publicación Oficial:</b> Boletín Oficial de la Provincia de Santa Fe\n\n"
-        f"💡 <i>Puedes consultar la edición del Boletín Oficial o acceder al portal SIN del Gobierno Provincial para ver el texto completo.</i>\n"
+        f"🏛️ <b>Emisor:</b> Poder Ejecutivo de la Provincia de Santa Fe (Gobernador y Ministros)\n"
+        f"📋 <b>Numeración Anual:</b> Los decretos provinciales se numeran correlativamente en cada año calendario.\n\n"
+        f"💡 <i>Puedes consultar la edición del Boletín Oficial o acceder al portal SIN del Gobierno Provincial para ver el texto completo de este decreto.</i>\n"
     )
     return card
 
 def build_nacion_norma_card(detail: dict) -> str:
     """Construye la tarjeta de una Norma Nacional (InfoLEG)."""
-    tipo_num = detail.get("tipo_numero") or f"Norma ID {detail.get('id')}"
+    raw_tipo = detail.get("tipo_numero") or f"Norma ID {detail.get('id')}"
+    tipo_num = " ".join(raw_tipo.split())
     emisor = detail.get("emisor") or "Poder Ejecutivo / Congreso Nacional"
     fecha_bo = detail.get("fecha_bo") or "No disponible"
     num_bo = detail.get("numero_bo") or "-"
@@ -167,10 +170,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🏢 <b>SIN / Boletín Oficial</b>: Decretos del <b>Poder Ejecutivo de Santa Fe</b>.\n"
         "• 🇦🇷 <b>InfoLEG</b>: Leyes, Decretos y DNU de la <b>República Argentina (Nación)</b>.\n\n"
         "🔍 <b>¿Cómo buscar?</b>\n"
-        "1. <b>Por número</b>: Envía solo el número (ej. <code>14207</code>, <code>20744</code>, <code>10260</code>, <code>70</code> o <code>100</code>). "
-        "Si existen leyes provinciales, decretos provinciales o normas nacionales con el mismo número, podrás elegir cuál ver.\n"
+        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>10260</code>) o número con año (ej. <code>70/2023</code>, <code>4990/1971</code>).\n"
         "2. <b>Por tema</b>: Escribe palabras clave (ej: <code>contrato de trabajo</code>, <code>salud</code>, <code>presupuesto</code>).\n\n"
-        "💡 <i>Podrás descargar PDFs oficiales, leer textos actualizados y navegar normas relacionadas.</i>"
+        "💡 <i>Podrás descargar PDFs oficiales, leer textos actualizados y navegar genealogías legislativas.</i>"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
 
@@ -179,24 +181,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
-    clean_num = "".join(filter(str.isdigit, text))
-    if clean_num and clean_num == text.replace(".", ""):
-        await handle_unified_number_search(update, context, clean_num)
+    # Verificar si es un patrón de número de norma o número/año (ej: "4990", "70/2023", "14.207")
+    norma_match = re.match(r"^(\d{1,6})(?:\s*[/–-]\s*(\d{2,4}))?$", text.replace(".", ""))
+    if norma_match:
+        numero = norma_match.group(1)
+        anio = norma_match.group(2) or ""
+        if len(anio) == 2:
+            anio = f"20{anio}" if int(anio) < 50 else f"19{anio}"
+        await handle_unified_number_search(update, context, numero, anio)
     else:
         await handle_search_by_topic(update, context, text)
 
-# --- Búsqueda Unificada por Número ---
+# --- Búsqueda Unificada por Número / Año ---
 
-async def handle_unified_number_search(update: Update, context: ContextTypes.DEFAULT_TYPE, numero: str):
+async def handle_unified_number_search(update: Update, context: ContextTypes.DEFAULT_TYPE, numero: str, anio: str = ""):
+    busqueda_desc = f"Nº {numero}/{anio}" if anio else f"Nº {numero}"
     msg = await update.message.reply_text(
-        f"🔍 Buscando <b>Nº {html.escape(numero)}</b> en <b>Santa Fe (Legislativo & Ejecutivo)</b> y <b>Nación</b>...",
+        f"🔍 Buscando <b>{html.escape(busqueda_desc)}</b> en <b>Santa Fe (Legislativo & Ejecutivo)</b> y <b>Nación</b>...",
         parse_mode="HTML"
     )
 
     try:
         sf_ley_task = isileg_api.search_leyes(numero_ley=numero, page=0, page_size=1)
-        nac_ley_task = infoleg_api.search_normas(tipo_norma="1", numero=numero, limit=2)
-        nac_dec_task = infoleg_api.search_normas(tipo_norma="2", numero=numero, limit=2)
+        nac_ley_task = infoleg_api.search_normas(tipo_norma="1", numero=numero, anio_sancion=anio, limit=3)
+        nac_dec_task = infoleg_api.search_normas(tipo_norma="2", numero=numero, anio_sancion=anio, limit=5)
 
         sf_res, nac_leys, nac_decs = await asyncio.gather(
             sf_ley_task, nac_ley_task, nac_dec_task, return_exceptions=True
@@ -208,7 +216,15 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
 
     sf_items = []
     if isinstance(sf_res, dict) and sf_res.get("data"):
-        sf_items = sf_res["data"]
+        # Las leyes provinciales tienen numeración única
+        if not anio:
+            sf_items = sf_res["data"]
+        else:
+            # Si se especificó año, filtrar si coincide el año de sanción/promulgación
+            for item in sf_res["data"]:
+                fechas = f"{item.get('fechaSancion','')} {item.get('fechaPromulgacion','')}"
+                if anio in fechas:
+                    sf_items.append(item)
 
     nac_ley_items = nac_leys if isinstance(nac_leys, list) else []
     nac_dec_items = nac_decs if isinstance(nac_decs, list) else []
@@ -216,32 +232,37 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
     # Construir opciones del menú
     buttons = []
 
-    # 1. Santa Fe - Ley Provincial
+    # 1. Santa Fe - Ley Provincial (ISILeg)
     for item in sf_items:
         id_ley = item["idLey"]
         label = f"🏛️ [Santa Fe] Ley Prov. Nº {numero}"
         buttons.append([InlineKeyboardButton(label, callback_data=f"sf:card:{id_ley}")])
 
-    # 2. Santa Fe - Decreto Provincial
-    label_dec_sf = f"🏢 [Santa Fe] Decreto Prov. Nº {numero}"
-    buttons.append([InlineKeyboardButton(label_dec_sf, callback_data=f"sfdec:card:{numero}")])
+    # 2. Santa Fe - Decreto Provincial (SIN / Ejecutivo)
+    if anio:
+        label_dec_sf = f"🏢 [Santa Fe] Decreto Prov. Nº {numero}/{anio}"
+        buttons.append([InlineKeyboardButton(label_dec_sf, callback_data=f"sfdec:card:{numero}:{anio}")])
+    else:
+        label_dec_sf = f"🏢 [Santa Fe] Decreto Prov. Nº {numero}"
+        buttons.append([InlineKeyboardButton(label_dec_sf, callback_data=f"sfdec:card:{numero}:")])
 
     # 3. Nación - Leyes
     for item in nac_ley_items:
         nid = item["id"]
-        label = f"🇦🇷 [Nación] Ley Nac. Nº {numero}"
+        tipo_lbl = " ".join(item.get("tipo_numero", f"Ley {numero}").split())
+        label = f"🇦🇷 [Nación] {tipo_lbl[:35]}"
         buttons.append([InlineKeyboardButton(label, callback_data=f"nac:card:{nid}")])
 
-    # 4. Nación - Decretos
+    # 4. Nación - Decretos (con indicación clara del año)
     for item in nac_dec_items:
         nid = item["id"]
-        tipo_lbl = item.get("tipo_numero", f"Decreto {numero}")
+        tipo_lbl = " ".join(item.get("tipo_numero", f"Decreto {numero}").split())
         label = f"🇦🇷 [Nación] {tipo_lbl[:35]}"
         buttons.append([InlineKeyboardButton(label, callback_data=f"nac:card:{nid}")])
 
     reply_markup = InlineKeyboardMarkup(buttons)
     menu_text = (
-        f"🏛️ <b>Se encontraron normas coincidentes con el Nº {html.escape(numero)}:</b>\n\n"
+        f"🏛️ <b>Se encontraron normas coincidentes con el {html.escape(busqueda_desc)}:</b>\n\n"
         f"Selecciona la norma que deseas consultar:"
     )
     await msg.edit_text(menu_text, reply_markup=reply_markup, parse_mode="HTML")
@@ -274,9 +295,9 @@ async def show_sf_ley_card(target_msg, id_ley: int):
         logger.error(f"Error mostrando tarjeta Santa Fe {id_ley}: {e}")
         await target_msg.edit_text(f"⚠️ Error al cargar detalle de Santa Fe: {html.escape(str(e))}")
 
-async def show_sf_decreto_card(target_msg, numero: str):
+async def show_sf_decreto_card(target_msg, numero: str, anio: str = ""):
     try:
-        card_text = build_sf_decreto_card(numero)
+        card_text = build_sf_decreto_card(numero, anio)
         buttons = [
             [
                 InlineKeyboardButton("📰 Boletín Oficial de Santa Fe", url="https://www.santafe.gob.ar/boletinoficial/"),
@@ -353,7 +374,8 @@ async def handle_search_by_topic(update: Update, context: ContextTypes.DEFAULT_T
     if nac_items:
         text_resp += "🇦🇷 <b>Nación (InfoLEG):</b>\n"
         for item in nac_items:
-            tipo_num = item.get("tipo_numero", f"Norma {item['id']}")
+            raw_t = item.get("tipo_numero", f"Norma {item['id']}")
+            tipo_num = " ".join(raw_t.split())
             sumario = (item.get("sumario") or "")[:60]
             text_resp += f"• <b>{html.escape(tipo_num)}</b>: {html.escape(sumario)}...\n"
             buttons.append([InlineKeyboardButton(f"🇦🇷 Ver {tipo_num[:30]}", callback_data=f"nac:card:{item['id']}")])
@@ -375,8 +397,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_sf_ley_card(query.message, id_ley)
         return
     elif data.startswith("sfdec:card:"):
-        num_dec = data.split(":")[2]
-        await show_sf_decreto_card(query.message, num_dec)
+        parts = data.split(":")
+        num_dec = parts[2]
+        anio_dec = parts[3] if len(parts) > 3 else ""
+        await show_sf_decreto_card(query.message, num_dec, anio_dec)
         return
     elif data.startswith("nac:card:"):
         nid = data.split(":")[2]
@@ -428,7 +452,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if texto:
             detail = await infoleg_api.get_norma_detail(nid)
-            titulo = detail.get("tipo_numero", f"Norma {nid}")
+            titulo = " ".join(detail.get("tipo_numero", f"Norma {nid}").split())
             tag = "Texto Actualizado" if prefer_act else "Texto Completo"
 
             if len(texto) <= 3500:
@@ -449,7 +473,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("⚠️ No se pudo recuperar el texto de la norma.")
         return
 
-    # 4. Modificaciones / Vínculos de Nación (modo 1 y modo 2 unificados)
+    # 4. Modificaciones / Vínculos de Nación
     elif data.startswith("nac:rel:"):
         nid = data.split(":")[2]
         status_msg = await query.message.reply_text("⏳ Consultando modificaciones y vínculos en InfoLEG...")
@@ -506,7 +530,7 @@ def main():
     port = int(os.getenv("PORT", "8080"))
     threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
 
-    logger.info("Iniciando Bot Legislativo Unificado...")
+    logger.info("Iniciando Bot Legislativo Unificado con soporte por Año...")
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
