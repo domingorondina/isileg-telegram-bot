@@ -225,7 +225,8 @@ async def handle_search_by_number(update: Update, context: ContextTypes.DEFAULT_
 
     except Exception as e:
         logger.error(f"Error buscando ley {numero}: {e}", exc_info=True)
-        await msg.edit_text(f"⚠️ Ocurrió un error al consultar ISILeg: {html.escape(str(e))}")
+        err_str = str(e) or type(e).__name__
+        await msg.edit_text(f"⚠️ Ocurrió un error al consultar ISILeg ({type(e).__name__}): {html.escape(err_str)}")
 
 async def handle_search_by_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, page: int = 0, is_callback: bool = False):
     target_msg = update.callback_query.message if is_callback else None
