@@ -1,7 +1,7 @@
 """
 Bot de Telegram Unificado para Información Legislativa:
 - 🏛️ ISILeg (Poder Legislativo y Decretos Provinciales - Santa Fe)
-- 🏢 SIN & Boletín Oficial de Santa Fe
+- 🏢 SIN & Boletín Oficial de Santa Fe (Poder Ejecutivo Provincial)
 - 🇦🇷 InfoLEG (República Argentina / Nivel Federal)
 
 Desarrollado para Domingo Rondina por Antigravity.
@@ -142,6 +142,23 @@ def build_sf_ley_card(detail: dict) -> str:
 
     return card
 
+def build_sf_decreto_sin_card(detail: dict) -> str:
+    """Construye la tarjeta de un Decreto Provincial de Santa Fe recuperado de SIN."""
+    numero = detail.get("numero", "S/N")
+    year = detail.get("year", "")
+    fecha = detail.get("fecha", "No disponible")
+    sumario = detail.get("sumario", "Sin sumario")
+
+    card = (
+        f"🏢 <b>[Santa Fe - Poder Ejecutivo] Decreto Provincial Nº {html.escape(str(numero))}/{html.escape(str(year))}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🏛️ <b>Emisor:</b> Poder Ejecutivo de la Provincia de Santa Fe\n"
+        f"📅 <b>Fecha / Publicación:</b> {html.escape(str(fecha))}\n\n"
+        f"📝 <b>Sumario / Objeto:</b>\n<i>{html.escape(str(sumario))}</i>\n\n"
+        f"📰 <b>Fuentes Oficiales:</b> Boletín Oficial de Santa Fe y Sistema SIN."
+    )
+    return card
+
 def build_sf_decreto_generico_card(numero: str, anio: str = "") -> str:
     """Construye la tarjeta de consulta para Decretos del Poder Ejecutivo de Santa Fe."""
     decreto_title = f"Decretos Provinciales Nº {numero}/{anio}" if anio else f"Decretos Provinciales Nº {numero}"
@@ -229,21 +246,22 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
     )
 
     try:
-        # Búsqueda exhaustiva sin límites restrictivos
+        # Búsqueda simultánea en todas las fuentes
         sf_ley_task = isileg_api.search_leyes(numero_ley=numero, tipo_ley=1, page=0, page_size=5)
         sf_dec_task = isileg_api.search_leyes(numero_ley=numero, tipo_ley=3, page=0, page_size=25)
+        sf_sin_task = sin_api.search_decretos(numero=numero, anio=anio)
         nac_ley_task = infoleg_api.search_normas(tipo_norma="1", numero=numero, anio_sancion=anio, limit=10)
         nac_dec_task = infoleg_api.search_normas(tipo_norma="2", numero=numero, anio_sancion=anio, limit=30)
 
-        sf_leys, sf_decs, nac_leys, nac_decs = await asyncio.gather(
-            sf_ley_task, sf_dec_task, nac_ley_task, nac_dec_task, return_exceptions=True
+        sf_leys, sf_decs, sf_sins, nac_leys, nac_decs = await asyncio.gather(
+            sf_ley_task, sf_dec_task, sf_sin_task, nac_ley_task, nac_dec_task, return_exceptions=True
         )
     except Exception as e:
         logger.error(f"Error en búsqueda paralela: {e}")
         await msg.edit_text(f"⚠️ Error al consultar las bases legislativas: {html.escape(str(e))}")
         return
 
-    # Normalizar resultados Santa Fe
+    # Normalizar resultados Santa Fe Leyes
     sf_ley_items = []
     if isinstance(sf_leys, dict) and sf_leys.get("data"):
         for it in sf_leys["data"]:
@@ -252,13 +270,32 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
                 it["_year"] = y
                 sf_ley_items.append(it)
 
+    # Normalizar resultados Santa Fe Decretos (ISILeg + SIN)
     sf_dec_items = []
+    seen_sf_years = set()
+
     if isinstance(sf_decs, dict) and sf_decs.get("data"):
         for it in sf_decs["data"]:
             y = extract_year_from_dates(it.get("fechaSancion"), it.get("fechaPromulgacion"))
             if not anio or (anio and y == anio):
                 it["_year"] = y
+                seen_sf_years.add(y)
                 sf_dec_items.append(it)
+
+    # Integrar resultados de SIN Santa Fe si el backend provincial responde
+    if isinstance(sf_sins, list):
+        for sin_item in sf_sins:
+            y = sin_item.get("year", "")
+            if y not in seen_sf_years:
+                sf_dec_items.append({
+                    "idLey": sin_item["id"],
+                    "numeroLey": numero,
+                    "asunto": sin_item.get("sumario", "Decreto Provincial SIN"),
+                    "_year": y,
+                    "_is_sin": True,
+                    "_detail": sin_item
+                })
+                seen_sf_years.add(y)
 
     nac_ley_items = nac_leys if isinstance(nac_leys, list) else []
     nac_dec_items = nac_decs if isinstance(nac_decs, list) else []
@@ -278,7 +315,10 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
             await show_sf_ley_card(msg, sf_ley_items[0]["idLey"])
             return
         elif len(sf_dec_items) == 1:
-            await show_sf_ley_card(msg, sf_dec_items[0]["idLey"])
+            if sf_dec_items[0].get("_is_sin"):
+                await show_sf_decreto_sin_card_direct(msg, sf_dec_items[0]["_detail"])
+            else:
+                await show_sf_ley_card(msg, sf_dec_items[0]["idLey"])
             return
         elif len(nac_ley_items) == 1:
             await show_nacion_norma_card(msg, nac_ley_items[0]["id"])
@@ -307,7 +347,7 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sf:card:{id_ley}")])
         item_num += 1
 
-    # 2. Santa Fe - Decretos Provinciales (Específicos de ISILeg)
+    # 2. Santa Fe - Decretos Provinciales (ISILeg / SIN)
     for item in sf_dec_items:
         id_ley = item["idLey"]
         y_str = f" / {item['_year']}" if item.get("_year") else ""
@@ -319,7 +359,10 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
             f"   📝 <i>{html.escape(asunto[:120])}</i>\n"
         )
         btn_label = f"🏢 [SF] Dto {numero}{y_str}: {asunto_short}"
-        buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sf:card:{id_ley}")])
+        if item.get("_is_sin"):
+            buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sfdec:gen:{numero}:{item.get('_year','')}")])
+        else:
+            buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sf:card:{id_ley}")])
         item_num += 1
 
     # 3. Nación - Leyes
@@ -352,12 +395,10 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         buttons.append([InlineKeyboardButton(btn_label, callback_data=f"nac:card:{nid}")])
         item_num += 1
 
-    # Si hay muchas opciones (ej: más de 12), Telegram permite hasta 100 botones inline
     menu_text = f"🏛️ <b>Se encontraron {total_opciones} normas con el {html.escape(busqueda_desc)}:</b>\n\n"
     menu_text += "\n".join(menu_lines)
     menu_text += "\n👇 <i>Toca la norma deseada para ver el texto completo y descargas:</i>"
 
-    # Si el mensaje supera el límite de 4096 caracteres de Telegram, truncamos con aviso
     if len(menu_text) > 4000:
         menu_text = menu_text[:3900] + "\n\n<i>...y más opciones en los botones inferiores.</i>"
 
@@ -391,6 +432,36 @@ async def show_sf_ley_card(target_msg, id_ley: int):
     except Exception as e:
         logger.error(f"Error mostrando tarjeta Santa Fe {id_ley}: {e}")
         await target_msg.edit_text(f"⚠️ Error al cargar detalle de Santa Fe: {html.escape(str(e))}")
+
+async def show_sf_decreto_sin_card_direct(target_msg, detail: dict):
+    try:
+        card_text = build_sf_decreto_sin_card(detail)
+        buttons = [
+            [
+                InlineKeyboardButton("📰 Boletín Oficial de Santa Fe", url="https://www.santafe.gob.ar/boletinoficial/"),
+                InlineKeyboardButton("🌐 Portal SIN Santa Fe", url="https://www.santafe.gov.ar/normativa/"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await target_msg.edit_text(card_text, reply_markup=reply_markup, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error mostrando decreto SIN: {e}")
+        await target_msg.edit_text(f"⚠️ Error: {html.escape(str(e))}")
+
+async def show_sf_decreto_generico_card(target_msg, numero: str, anio: str = ""):
+    try:
+        card_text = build_sf_decreto_generico_card(numero, anio)
+        buttons = [
+            [
+                InlineKeyboardButton("📰 Boletín Oficial de Santa Fe", url="https://www.santafe.gob.ar/boletinoficial/"),
+                InlineKeyboardButton("🌐 Portal SIN Santa Fe", url="https://www.santafe.gov.ar/normativa/"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await target_msg.edit_text(card_text, reply_markup=reply_markup, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error mostrando decreto genérico Santa Fe {numero}: {e}")
+        await target_msg.edit_text(f"⚠️ Error: {html.escape(str(e))}")
 
 async def show_nacion_norma_card(target_msg, id_norma: str):
     try:
@@ -612,7 +683,7 @@ def main():
     port = int(os.getenv("PORT", "8080"))
     threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
 
-    logger.info("Iniciando Bot Legislativo Unificado con listado exhaustivo de todos los años...")
+    logger.info("Iniciando Bot Legislativo Unificado preparado para SIN y todas las fuentes...")
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
