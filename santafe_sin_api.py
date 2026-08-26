@@ -13,7 +13,7 @@ from typing import Optional, Dict, Any, List
 
 SIN_BASE_URL = "https://www.santafe.gov.ar/normativa"
 BOLETIN_BASE_URL = "https://www.santafe.gob.ar/boletinoficial"
-DEFAULT_TIMEOUT = 15.0
+DEFAULT_TIMEOUT = 12.0
 
 class SantaFeSINAPI:
     def __init__(self):
@@ -41,14 +41,19 @@ class SantaFeSINAPI:
 
     async def search_decretos(self, numero: str, anio: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Busca Decretos del Poder Ejecutivo de Santa Fe.
+        Busca Decretos del Poder Ejecutivo de Santa Fe en el SIN (src/busqueda.php).
+        Manejo tolerante a fallos: devuelve los registros parseados si el backend provincial está activo,
+        o lista vacía si está en mantenimiento sin bloquear el bot.
         """
         clean_num = "".join(filter(str.isdigit, str(numero)))
         clean_anio = "".join(filter(str.isdigit, str(anio))) if anio else ""
 
+        if not clean_num:
+            return []
+
         payload = {
-            "tipoNorma": "2", # Decretos
-            "organismoSelect": "",
+            "tipoNorma": "2", # 2: Decretos
+            "organismoSelect": "0",
             "numNorma": clean_num,
             "anio": clean_anio,
             "numExpediente": "",
@@ -58,21 +63,53 @@ class SantaFeSINAPI:
             "fechaHasta": "",
             "action": "buscar",
             "pagina": "1",
-            "ordenarPor": "fecha",
+            "ordenarPor": "2",
             "ordenBusqueda": "DESC"
         }
 
-        # Generar entrada simulada estructurada si el backend del portal está en mantenimiento
-        results = [{
-            "id": f"dec_{clean_num}",
-            "tipo": "Decreto Provincial",
-            "numero": clean_num,
-            "anio": clean_anio or str(datetime.date.today().year),
-            "emisor": "Poder Ejecutivo de la Provincia de Santa Fe (Gobernación)",
-            "jurisdiccion": "Santa Fe (Ejecutivo)",
-            "url_portal": f"{SIN_BASE_URL}/index.php",
-            "url_boletin_buscar": f"{BOLETIN_BASE_URL}/"
-        }]
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
+                r = await client.post(
+                    f"{SIN_BASE_URL}/src/busqueda.php",
+                    data=payload,
+                    headers=self.headers
+                )
+                if r.status_code == 200 and len(r.text) > 400 and "Error" not in r.text and "0 resultados" not in r.text:
+                    return self._parse_sin_results(r.text, default_num=clean_num)
+        except Exception:
+            pass
+
+        return []
+
+    def _parse_sin_results(self, html_content: str, default_num: str = "") -> List[Dict[str, Any]]:
+        soup = BeautifulSoup(html_content, "html.parser")
+        results = []
+
+        for tr in soup.find_all("tr"):
+            cells = tr.find_all(["td", "th"])
+            if len(cells) >= 3:
+                c0 = " ".join(cells[0].get_text(" ", strip=True).split())
+                c1 = " ".join(cells[1].get_text(" ", strip=True).split())
+                c2 = " ".join(cells[2].get_text(" ", strip=True).split())
+
+                if "Número" in c0 and "Descripción" in c2:
+                    continue
+
+                year_m = re.search(r"/ (\d{4})", c0) or re.search(r"(\d{4})", c1)
+                year_str = year_m.group(1) if year_m else ""
+
+                results.append({
+                    "id": f"sin_{default_num}_{year_str}",
+                    "tipo": "Decreto Provincial",
+                    "numero": default_num,
+                    "year": year_str,
+                    "fecha": c1,
+                    "emisor": "Poder Ejecutivo de la Provincia de Santa Fe",
+                    "jurisdiccion": "Santa Fe (Ejecutivo)",
+                    "sumario": c2 or "Decreto del Poder Ejecutivo Provincial",
+                    "url_portal": f"{SIN_BASE_URL}/index.php",
+                    "url_boletin_buscar": f"{BOLETIN_BASE_URL}/"
+                })
 
         return results
 
