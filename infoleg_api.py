@@ -29,7 +29,7 @@ class InfoLegAPI:
         anio_sancion: Optional[str] = None,
         texto: Optional[str] = None,
         dependencia: str = "",
-        limit: int = 10
+        limit: int = 25
     ) -> List[Dict[str, Any]]:
         """
         Realiza una búsqueda en buscarNormas.do y devuelve la lista estructurada de resultados.
@@ -60,7 +60,7 @@ class InfoLegAPI:
 
         return self._parse_search_results(content, limit=limit)
 
-    def _parse_search_results(self, html_content: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def _parse_search_results(self, html_content: str, limit: int = 25) -> List[Dict[str, Any]]:
         soup = BeautifulSoup(html_content, "html.parser")
         results = []
         seen_ids = set()
@@ -68,7 +68,8 @@ class InfoLegAPI:
         for a in soup.find_all("a", href=True):
             href = a["href"]
             if "verNorma.do" in href:
-                match = re.search(r"id=(\d+)", href)
+                # Usar regex estricto para evitar coincidir con jsessionid
+                match = re.search(r"[?&]id=(\d+)", href)
                 if match:
                     norma_id = match.group(1)
                     if norma_id in seen_ids:
@@ -89,7 +90,7 @@ class InfoLegAPI:
                         c1 = " ".join(cells[1].get_text(" ", strip=True).split())
                         c2 = " ".join(cells[2].get_text(" ", strip=True).split())
 
-                        # Ignorar encabezados
+                        # Ignorar fila de encabezado
                         if "Número" in c0 and "Descripción" in c2:
                             continue
 
@@ -102,7 +103,7 @@ class InfoLegAPI:
                     elif len(cells) == 2:
                         sumario = " ".join(cells[1].get_text(" ", strip=True).split())
 
-                    # Extraer año del texto o fecha si está disponible
+                    # Extraer año
                     year_match = re.search(r"/ (\d{4})", tipo_num)
                     year_str = year_match.group(1) if year_match else ""
 
@@ -229,7 +230,7 @@ class InfoLegAPI:
                 a_tag = tr.find("a", href=re.compile(r"verNorma\.do"))
                 nid = ""
                 if a_tag:
-                    match = re.search(r"id=(\d+)", a_tag["href"])
+                    match = re.search(r"[?&]id=(\d+)", a_tag["href"])
                     if match:
                         nid = match.group(1)
 
