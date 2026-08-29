@@ -1,13 +1,15 @@
 # Contexto y Documentación Técnica: ISILeg Web (Senado Santa Fe)
 
-**URL Oficial ISILeg**: https://isilegweb.senadosantafe.gob.ar/  
+**URL Oficial ISILeg (Legislativo Santa Fe)**: https://isilegweb.senadosantafe.gob.ar/  
+**URL Oficial SIN (Ejecutivo Santa Fe)**: https://www.santafe.gov.ar/normativa/  
+**URL Oficial InfoLEG (Nación Argentina)**: https://www.infoleg.gob.ar/  
 **Bot de Telegram**: [@isileg_bot](https://t.me/isileg_bot)  
-**Estado Cloud**: 🟢 **LIVE en Render 24/7**  
+**Estado Cloud**: 🟢 **LIVE en Render (Modo Webhook Eficiente - 0 Horas Idle)**  
 **Dashboard Render**: [https://dashboard.render.com/web/srv-da6r8sh0er6s73d699pg](https://dashboard.render.com/web/srv-da6r8sh0er6s73d699pg)  
-**URL Pública Health Check**: [https://isileg-telegram-bot.onrender.com](https://isileg-telegram-bot.onrender.com)  
+**URL Pública Webhook/Health Check**: [https://isileg-telegram-bot.onrender.com](https://isileg-telegram-bot.onrender.com)  
 **Repositorio GitHub**: [https://github.com/domingorondina/isileg-telegram-bot](https://github.com/domingorondina/isileg-telegram-bot)  
-**Última Actualización**: 2026-08-25  
-**Conversation ID**: `e83ef439-f27f-4b62-bcdb-ef3b01dcdbab`
+**Última Actualización**: 2026-08-29  
+**Conversation ID**: `626e87fb-8ea9-4a62-8176-6638a96d1d7f`
 
 ---
 
@@ -20,7 +22,7 @@ Técnicamente, se compone de:
 2. Un backend con una **API REST pública en `/api/`** que entrega datos estructurados en formato JSON.
 3. Repositorio de documentos en formato **PDF** (textos sancionados, versiones actualizadas, fojas escaneadas de expedientes y diarios de sesiones).
 4. **Bot de Telegram (`bot.py`)**: Asistente interactivo con botones inline para búsqueda de leyes, descarga de documentos oficiales y navegación por normas modificatorias y vinculadas.
-5. **Servidor HTTP Embebido & Dockerfile**: Puerto 8080 para Health Checks de Render (Free Tier), permitiendo ejecución 24/7 en la nube sin depender de la PC encendida.
+5. **Modo Webhook & Servidor HTTP**: Escucha en el puerto 8080. En Render se activa por demanda ante mensajes de Telegram (entrando en estado de suspensión automática en inactividad para no agotar la cuota de horas).
 
 ---
 
