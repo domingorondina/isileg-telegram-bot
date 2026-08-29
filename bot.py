@@ -681,9 +681,9 @@ def main():
         return
 
     port = int(os.getenv("PORT", "8080"))
-    threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
+    bot_mode = os.getenv("BOT_MODE", "webhook").lower()
+    external_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("WEBHOOK_URL")
 
-    logger.info("Iniciando Bot Legislativo Unificado preparado para SIN y todas las fuentes...")
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
@@ -691,7 +691,22 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    app.run_polling(drop_pending_updates=True)
+    if bot_mode == "webhook" and external_url:
+        webhook_path = token
+        full_webhook_url = f"{external_url.rstrip('/')}/{webhook_path}"
+        logger.info("Iniciando Bot Legislativo Unificado en MODO WEBHOOK...")
+        logger.info(f"Escuchando en 0.0.0.0:{port} con Webhook URL: {full_webhook_url}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=webhook_path,
+            webhook_url=full_webhook_url,
+            drop_pending_updates=True
+        )
+    else:
+        logger.info("Iniciando Bot Legislativo Unificado en MODO POLLING...")
+        threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
+        app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
