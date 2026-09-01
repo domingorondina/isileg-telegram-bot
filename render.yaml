@@ -8,8 +8,9 @@ services:
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: SCRAPER_API_KEY
+        sync: false
       - key: PORT
         value: 8080
       - key: BOT_MODE
         value: webhook
-
