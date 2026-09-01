@@ -1,15 +1,16 @@
 """
-Bot de Telegram Unificado para Información Legislativa con Auditoría en Vivo:
+Bot de Telegram Unificado para Información Legislativa:
 - 🏛️ ISILeg (Poder Legislativo y Decretos Provinciales - Santa Fe)
 - 🏢 SIN & Boletín Oficial de Santa Fe (Poder Ejecutivo Provincial)
 - 🇦🇷 InfoLEG (República Argentina / Nivel Federal)
-- 📊 Endpoint de Diagnóstico y Logs en Vivo (/logs y /healthz)
+- 🚀 Servidor HTTP Asíncrono Unificado: Webhook Nativo + /logs + /healthz (Puerto 8080)
 
 Desarrollado para Domingo Rondina por Antigravity.
 """
 
 import os
 import io
+import json
 import html
 import asyncio
 import logging
@@ -17,6 +18,7 @@ import re
 import time
 import collections
 from datetime import datetime
+from aiohttp import web
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -34,7 +36,7 @@ from santafe_sin_api import SantaFeSINAPI
 
 load_dotenv()
 
-# --- Buffer Circular de Logs en Memoria para Diagnóstico en Vivo ---
+# --- Buffer Circular de Logs en Memoria ---
 MAX_LOG_ENTRIES = 200
 live_log_buffer = collections.deque(maxlen=MAX_LOG_ENTRIES)
 
@@ -50,7 +52,7 @@ class LiveLogHandler(logging.Handler):
         except Exception:
             pass
 
-# Configuración de Logging
+# Logging
 log_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
@@ -65,12 +67,12 @@ root_logger.addHandler(live_handler)
 
 logger = logging.getLogger(__name__)
 
-# Instancias de API
+# APIs
 isileg_api = ISILegAPI()
 infoleg_api = InfoLegAPI()
 sin_api = SantaFeSINAPI()
 
-# --- Formateadores de Mensajes ---
+# --- Helpers ---
 
 def extract_year_from_dates(*dates) -> str:
     for d in dates:
@@ -89,7 +91,6 @@ def shorten_text(text: str, max_len: int = 35) -> str:
     return clean
 
 def build_sf_ley_card(detail: dict) -> str:
-    """Construye la tarjeta de una Ley o Decreto de Santa Fe (ISILeg)."""
     num_ley = detail.get("numeroLey", "S/N")
     asunto = detail.get("asunto") or "Sin asunto registrado"
     fecha_sancion = detail.get("fechaSancion") or "No disponible"
@@ -133,7 +134,6 @@ def build_sf_ley_card(detail: dict) -> str:
     return card
 
 def build_sf_decreto_sin_card(detail: dict) -> str:
-    """Construye la tarjeta de un Decreto Provincial de Santa Fe recuperado de SIN."""
     numero = detail.get("numero", "S/N")
     year = detail.get("year", "")
     fecha = detail.get("fecha", "No disponible")
@@ -152,7 +152,6 @@ def build_sf_decreto_sin_card(detail: dict) -> str:
     return card
 
 def build_nacion_norma_card(detail: dict) -> str:
-    """Construye la tarjeta de una Norma Nacional (InfoLEG)."""
     raw_tipo = detail.get("tipo_numero") or f"Norma ID {detail.get('id')}"
     tipo_num = " ".join(raw_tipo.split())
     emisor = detail.get("emisor") or "Poder Ejecutivo / Congreso Nacional"
@@ -184,11 +183,11 @@ def build_nacion_norma_card(detail: dict) -> str:
 
     return card
 
-# --- Handlers de Comandos y Mensajes ---
+# --- Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    logger.info(f"Comando /start recibido de usuario: {user.username or user.first_name} (ID: {user.id})")
+    logger.info(f"Comando /start de {user.username or user.first_name} (ID: {user.id})")
     welcome_text = (
         "👋 <b>Bienvenido al Asistente Legislativo Argentino Integral</b>\n\n"
         "Este bot consulta en tiempo real tres fuentes jurídicas oficiales:\n"
@@ -196,7 +195,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🏢 <b>SIN / Boletín Oficial</b>: Decretos y Actos del <b>Poder Ejecutivo de Santa Fe</b>.\n"
         "• 🇦🇷 <b>InfoLEG</b>: Leyes, Decretos y DNU de la <b>República Argentina (Nación)</b>.\n\n"
         "🔍 <b>¿Cómo buscar?</b>\n"
-        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>2756</code>, <code>2439</code>) o número con año (ej. <code>2756/2025</code>, <code>70/2023</code>).\n"
+        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>2756</code>, <code>2439</code>) o con año (ej. <code>2756/2025</code>).\n"
         "2. <b>Por tema</b>: Escribe palabras clave (ej: <code>contrato de trabajo</code>, <code>salud</code>, <code>presupuesto</code>).\n\n"
         "💡 <i>Podrás descargar PDFs oficiales, leer textos actualizados y navegar genealogías legislativas.</i>"
     )
@@ -220,7 +219,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await handle_search_by_topic(update, context, text)
 
-# --- Búsqueda Unificada Exhaustiva por Número / Año ---
+# --- Búsqueda por Número / Año ---
 
 async def handle_unified_number_search(update: Update, context: ContextTypes.DEFAULT_TYPE, numero: str, anio: str = ""):
     busqueda_desc = f"Nº {numero}/{anio}" if anio else f"Nº {numero}"
@@ -247,7 +246,7 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         await msg.edit_text(f"⚠️ Error al consultar las bases legislativas: {html.escape(str(e))}")
         return
 
-    # Normalizar resultados Santa Fe Leyes
+    # Santa Fe Leyes
     sf_ley_items = []
     if isinstance(sf_leys, dict) and sf_leys.get("data"):
         for it in sf_leys["data"]:
@@ -256,11 +255,10 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
                 it["_year"] = y
                 sf_ley_items.append(it)
 
-    # Normalizar resultados Santa Fe Decretos (ISILeg + SIN)
+    # Santa Fe Decretos (ISILeg + SIN)
     sf_dec_items = []
     seen_sf_years = set()
 
-    # 1. Decretos en ISILeg
     if isinstance(sf_decs, dict) and sf_decs.get("data"):
         for it in sf_decs["data"]:
             y = extract_year_from_dates(it.get("fechaSancion"), it.get("fechaPromulgacion"))
@@ -269,7 +267,6 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
                 seen_sf_years.add(y)
                 sf_dec_items.append(it)
 
-    # 2. Decretos en SIN (Poder Ejecutivo)
     if isinstance(sf_sins, list):
         for sin_item in sf_sins:
             y = sin_item.get("year", "")
@@ -296,7 +293,6 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         )
         return
 
-    # Si hay una única coincidencia, mostramos la tarjeta directa
     if total_opciones == 1:
         if len(sf_ley_items) == 1:
             await show_sf_ley_card(msg, sf_ley_items[0]["idLey"])
@@ -314,12 +310,11 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
             await show_nacion_norma_card(msg, nac_dec_items[0]["id"])
             return
 
-    # Construir listado de todas las normas encontradas con su año y sumario
     buttons = []
     item_num = 1
     menu_lines = []
 
-    # 1. Santa Fe - Leyes Provinciales
+    # 1. Santa Fe - Leyes
     for item in sf_ley_items:
         id_ley = item["idLey"]
         y_str = f" ({item['_year']})" if item.get("_year") else ""
@@ -334,7 +329,7 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         buttons.append([InlineKeyboardButton(btn_label, callback_data=f"sf:card:{id_ley}")])
         item_num += 1
 
-    # 2. Santa Fe - Decretos Provinciales (ISILeg / SIN)
+    # 2. Santa Fe - Decretos (SIN / ISILeg)
     for item in sf_dec_items:
         id_ley = item["idLey"]
         y_str = f" / {item['_year']}" if item.get("_year") else ""
@@ -368,7 +363,7 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         buttons.append([InlineKeyboardButton(btn_label, callback_data=f"nac:card:{nid}")])
         item_num += 1
 
-    # 4. Nación - Todos los Decretos de cada año
+    # 4. Nación - Decretos
     for item in nac_dec_items:
         nid = item["id"]
         tipo_lbl = " ".join(item.get("tipo_numero", f"Decreto {numero}").split())
@@ -463,7 +458,7 @@ async def show_nacion_norma_card(target_msg, id_norma: str):
         logger.error(f"Error mostrando tarjeta Nación {id_norma}: {e}")
         await target_msg.edit_text(f"⚠️ Error al cargar detalle de Nación: {html.escape(str(e))}")
 
-# --- Búsqueda Temática / Palabras Clave ---
+# --- Búsqueda Temática ---
 
 async def handle_search_by_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
     user = update.effective_user
@@ -527,7 +522,7 @@ async def handle_search_by_topic(update: Update, context: ContextTypes.DEFAULT_T
     reply_markup = InlineKeyboardMarkup(buttons)
     await msg.edit_text(text_resp, reply_markup=reply_markup, parse_mode="HTML")
 
-# --- Callbacks Handler ---
+# --- Callbacks ---
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -548,7 +543,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if detail:
             await show_sf_decreto_sin_card_direct(query.message, detail)
         else:
-            # Fallback si expiró el caché
             parts = sin_id.split("_")
             num = parts[1] if len(parts) > 1 else ""
             yr = parts[2] if len(parts) > 2 else ""
@@ -630,7 +624,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("⚠️ No se pudo recuperar el texto de la norma.")
         return
 
-    # 4. Modificaciones / Vínculos de Nación (modo 1 y modo 2 unificados)
+    # 4. Modificaciones InfoLEG
     elif data.startswith("nac:rel:"):
         nid = data.split(":")[2]
         status_msg = await query.message.reply_text("⏳ Consultando modificaciones y vínculos en InfoLEG...")
@@ -661,7 +655,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("ℹ️ No se registraron modificaciones para esta norma.")
         return
 
-    # 5. Relaciones de Santa Fe
+    # 5. Relaciones Santa Fe
     elif data.startswith("sf:rel:"):
         id_ley = int(data.split(":")[2])
         detail = await isileg_api.get_ley_detail(id_ley)
@@ -679,63 +673,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"❌ ERROR NO CONTROLADO en update ({update}): {context.error}", exc_info=context.error)
 
-# --- Servidor HTTP Ligero para Auditoría y Health Check en Render ---
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
+# --- Servidor Webhook + Logs + Health Check Asíncrono Unificado (aiohttp) ---
 
-class DiagnosticsHTTPHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/healthz" or self.path == "/":
-            self.send_response(200)
-            self.send_header("Content-type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OK - Asistente Legislativo Activo")
-        elif self.path == "/logs":
-            self.send_response(200)
-            self.send_header("Content-type", "text/html; charset=utf-8")
-            self.end_headers()
-            
-            html_out = "<html><head><title>Logs en Vivo - Asistente Legislativo</title>"
-            html_out += "<style>body{font-family:monospace;background:#1e1e1e;color:#d4d4d4;padding:20px;} .item{margin-bottom:8px;border-bottom:1px solid #333;padding-bottom:4px;} .INFO{color:#4ec9b0;} .ERROR{color:#f44747;} .time{color:#888;}</style></head><body>"
-            html_out += "<h2>📊 Registro de Eventos en Vivo (Últimos 200 eventos)</h2>"
-            
-            if not live_log_buffer:
-                html_out += "<p>No hay eventos registrados aún en esta sesión.</p>"
-            else:
-                for entry in reversed(live_log_buffer):
-                    lvl = entry.get("level", "INFO")
-                    tm = entry.get("time", "")
-                    msg = html.escape(entry.get("msg", ""))
-                    html_out += f"<div class='item'><span class='time'>[{tm}]</span> <span class='{lvl}'>[{lvl}]</span> {msg}</div>"
-            
-            html_out += "</body></html>"
-            self.wfile.write(html_out.encode("utf-8"))
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, format, *args):
-        pass
-
-def run_diagnostics_server(port: int = 8080):
-    server = HTTPServer(("0.0.0.0", port), DiagnosticsHTTPHandler)
-    logger.info(f"Servidor de Diagnóstico y Logs (/logs) activo en puerto {port}")
-    server.serve_forever()
-
-# --- Main Application ---
-
-def main():
+async def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         logger.error("TELEGRAM_BOT_TOKEN no configurado.")
         return
 
     port = int(os.getenv("PORT", "8080"))
+    external_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("WEBHOOK_URL") or "https://isileg-telegram-bot.onrender.com"
+    webhook_path = f"/{token}"
+    full_webhook_url = f"{external_url.rstrip('/')}{webhook_path}"
 
-    # Iniciar servidor de diagnóstico /logs en hilo daemon
-    threading.Thread(target=run_diagnostics_server, args=(port,), daemon=True).start()
-
-    logger.info("Iniciando Bot Legislativo Unificado con Auditoría en Vivo y SIN integrado...")
+    logger.info("Iniciando Bot Legislativo con Servidor Webhook + Logs Integrado...")
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
@@ -744,7 +695,65 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
 
-    app.run_polling(drop_pending_updates=True)
+    # Iniciar la aplicación de telegram
+    await app.initialize()
+    await app.start()
+    await app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
+    logger.info(f"Webhook registrado en Telegram: {full_webhook_url}")
+
+    # Definir rutas en aiohttp
+    routes = web.RouteTableDef()
+
+    @routes.get("/")
+    @routes.get("/healthz")
+    async def health_check(request):
+        return web.Response(text="OK - Asistente Legislativo Activo", content_type="text/plain")
+
+    @routes.get("/logs")
+    async def logs_view(request):
+        html_out = "<html><head><title>Logs en Vivo - Asistente Legislativo</title>"
+        html_out += "<style>body{font-family:monospace;background:#1e1e1e;color:#d4d4d4;padding:20px;} .item{margin-bottom:8px;border-bottom:1px solid #333;padding-bottom:4px;} .INFO{color:#4ec9b0;} .ERROR{color:#f44747;} .time{color:#888;}</style></head><body>"
+        html_out += "<h2>📊 Registro de Eventos en Vivo (Últimos 200 eventos)</h2>"
+        if not live_log_buffer:
+            html_out += "<p>No hay eventos registrados aún en esta sesión.</p>"
+        else:
+            for entry in reversed(live_log_buffer):
+                lvl = entry.get("level", "INFO")
+                tm = entry.get("time", "")
+                msg = html.escape(entry.get("msg", ""))
+                html_out += f"<div class='item'><span class='time'>[{tm}]</span> <span class='{lvl}'>[{lvl}]</span> {msg}</div>"
+        html_out += "</body></html>"
+        return web.Response(text=html_out, content_type="text/html")
+
+    @routes.post(webhook_path)
+    async def telegram_webhook(request):
+        try:
+            req_data = await request.json()
+            update = Update.de_json(req_data, app.bot)
+            # Procesar el update en segundo plano sin trabar la respuesta HTTP
+            asyncio.create_task(app.process_update(update))
+            return web.Response(text="OK", status=200)
+        except Exception as e:
+            logger.error(f"Error procesando webhook de Telegram: {e}")
+            return web.Response(text="Error", status=500)
+
+    web_app = web.Application()
+    web_app.add_routes(routes)
+
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Servidor Webhook + Logs corriendo en http://0.0.0.0:{port}")
+
+    # Mantener corriendo
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        await runner.cleanup()
+        await app.stop()
+        await app.shutdown()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
