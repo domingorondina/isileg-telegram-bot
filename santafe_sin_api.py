@@ -13,7 +13,10 @@ from typing import Optional, Dict, Any, List
 
 SIN_BASE_URL = "https://www.santafe.gov.ar/normativa"
 BOLETIN_BASE_URL = "https://www.santafe.gov.ar/boletinoficial"
-DEFAULT_TIMEOUT = 12.0
+DEFAULT_TIMEOUT = 10.0
+
+# Caché en memoria para recuperar detalles de decretos del SIN al tocar botones
+sin_detail_cache: Dict[str, Dict[str, Any]] = {}
 
 class SantaFeSINAPI:
     def __init__(self):
@@ -74,7 +77,51 @@ class SantaFeSINAPI:
                     headers=self.headers
                 )
                 if r.status_code == 200 and len(r.text) > 400 and "Error" not in r.text and "0 resultados" not in r.text:
-                    return self._parse_sin_results(r.text, default_num=clean_num)
+                    results = self._parse_sin_results(r.text, default_num=clean_num)
+                    # Guardar en caché para acceso rápido desde botones
+                    for it in results:
+                        sin_detail_cache[it["id"]] = it
+                    return results
+        except Exception:
+            pass
+
+        return []
+
+    async def search_by_text(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Busca normas en el SIN de Santa Fe por texto / palabras clave.
+        """
+        if not query or len(query.strip()) < 3:
+            return []
+
+        payload = {
+            "tipoNorma": "0", # 0: Todas las normas
+            "organismoSelect": "0",
+            "numNorma": "",
+            "anio": "",
+            "numExpediente": "",
+            "textoNorma": query.strip(),
+            "frase": "cualquiera",
+            "fechaDesde": "",
+            "fechaHasta": "",
+            "action": "buscar",
+            "pagina": "1",
+            "ordenarPor": "2",
+            "ordenBusqueda": "DESC"
+        }
+
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
+                r = await client.post(
+                    f"{SIN_BASE_URL}/src/busqueda.php",
+                    data=payload,
+                    headers=self.headers
+                )
+                if r.status_code == 200 and len(r.text) > 400 and "Error" not in r.text and "0 resultados" not in r.text:
+                    results = self._parse_sin_results(r.text)
+                    for it in results:
+                        sin_detail_cache[it["id"]] = it
+                    return results[:limit]
         except Exception:
             pass
 
@@ -87,11 +134,6 @@ class SantaFeSINAPI:
         for tr in soup.find_all("tr"):
             cells = tr.find_all(["td", "th"])
             if len(cells) >= 4:
-                # Estructura del SIN:
-                # c[0]: Número/Año (ej. '2439/2025')
-                # c[1]: Norma Legal (ej. 'DECRETO')
-                # c[2]: Descripción / Sumario
-                # c[3]: Fecha (ej. '25-09-2025')
                 c0 = cells[0].get_text(" ", strip=True)
                 c1 = cells[1].get_text(" ", strip=True)
                 c2 = cells[2].get_text(" ", strip=True)
@@ -100,52 +142,35 @@ class SantaFeSINAPI:
                 if "Número" in c0 or "Norma" in c1:
                     continue
 
-                # Extraer año de c0 (ej. '2439/2025') o de c3 (fecha)
                 year_m = re.search(r"/(?: )?(\d{4})", c0) or re.search(r"(\d{4})", c3)
                 year_str = year_m.group(1) if year_m else ""
 
                 num_m = re.search(r"^(\d+)", c0)
                 num_str = num_m.group(1) if num_m else default_num
 
+                tipo_desc = c1 if c1 and c1 != "-" else "Decreto Provincial"
+                if tipo_desc == "DECRETO":
+                    tipo_desc = "Decreto Provincial"
+
+                fecha_clean = c3 if c3 and c3 != "-" else "No registrada"
+                pdf_boletin_url = self.build_boletin_pdf_url(fecha_clean)
+
+                item_id = f"sin_{num_str}_{year_str}"
                 results.append({
-                    "id": f"sin_{num_str}_{year_str}",
-                    "tipo": "Decreto Provincial",
+                    "id": item_id,
+                    "tipo": tipo_desc,
                     "numero": num_str,
                     "year": year_str,
-                    "fecha": c3 if c3 and c3 != "-" else "No registrada",
+                    "fecha": fecha_clean,
                     "emisor": "Poder Ejecutivo de la Provincia de Santa Fe",
                     "jurisdiccion": "Santa Fe (Ejecutivo)",
                     "sumario": c2 or "Decreto del Poder Ejecutivo Provincial",
                     "url_portal": f"{SIN_BASE_URL}/index.php",
+                    "url_boletin_pdf": pdf_boletin_url,
                     "url_boletin_buscar": f"{BOLETIN_BASE_URL}/"
                 })
 
         return results
 
-    async def get_temas_catalog(self) -> List[Dict[str, Any]]:
-        """
-        Obtiene el catálogo oficial de temas del Poder Ejecutivo de Santa Fe.
-        """
-        url = f"{SIN_BASE_URL}/src/ajaxServices.php?tipoNorma=2&accion=temas"
-        try:
-            async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
-                r = await client.get(url, headers={"X-Requested-With": "XMLHttpRequest"})
-                if r.status_code == 200 and r.text.startswith("["):
-                    return r.json()
-        except Exception:
-            pass
-        return []
-
-    async def get_iniciadores_catalog(self) -> List[Dict[str, Any]]:
-        """
-        Obtiene el catálogo de organismos y ministerios emisores de Santa Fe.
-        """
-        url = f"{SIN_BASE_URL}/src/ajaxServices.php?tipoNorma=2&accion=iniciadores"
-        try:
-            async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
-                r = await client.get(url, headers={"X-Requested-With": "XMLHttpRequest"})
-                if r.status_code == 200 and r.text.startswith("["):
-                    return r.json()
-        except Exception:
-            pass
-        return []
+    def get_cached_detail(self, sin_id: str) -> Optional[Dict[str, Any]]:
+        return sin_detail_cache.get(sin_id)
