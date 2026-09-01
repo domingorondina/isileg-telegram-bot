@@ -672,6 +672,72 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text_rel += f"• <b>{r['tipo']} Nº {r['numero']}</b>\n  <i>\"{html.escape(r['contexto'])}\"</i>\n"
         await query.message.reply_text(text_rel, parse_mode="HTML")
 
+# --- Webhook & Health Check Server ---
+
+class WebhookAndHealthHandler(BaseHTTPRequestHandler):
+    app_instance = None
+    app_loop = None
+    token_path = ""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def do_POST(self):
+        path_clean = self.path.strip("/")
+        if self.token_path and path_clean == self.token_path.strip("/"):
+            content_length = int(self.headers.get("Content-Length", 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode("utf-8"))
+                update = Update.de_json(data, self.app_instance.bot)
+                if self.app_loop and self.app_instance:
+                    asyncio.run_coroutine_threadsafe(
+                        self.app_instance.process_update(update), self.app_loop
+                    )
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            except Exception as e:
+                logger.error(f"Error procesando update de Webhook: {e}")
+                self.send_response(500)
+                self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+async def run_webhook_app(app, token: str, external_url: str, port: int):
+    await app.initialize()
+    await app.start()
+
+    full_webhook_url = f"{external_url.rstrip('/')}/{token}"
+    logger.info(f"Registrando Webhook en Telegram: {full_webhook_url}")
+    await app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
+
+    WebhookAndHealthHandler.app_instance = app
+    WebhookAndHealthHandler.app_loop = asyncio.get_running_loop()
+    WebhookAndHealthHandler.token_path = token
+
+    server = HTTPServer(("0.0.0.0", port), WebhookAndHealthHandler)
+    logger.info(f"Servidor Webhook + Health Check escuchando en puerto {port}")
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        await app.stop()
+        await app.shutdown()
+
 # --- Main Application ---
 
 def main():
@@ -692,17 +758,8 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     if bot_mode == "webhook" and external_url:
-        webhook_path = token
-        full_webhook_url = f"{external_url.rstrip('/')}/{webhook_path}"
         logger.info("Iniciando Bot Legislativo Unificado en MODO WEBHOOK...")
-        logger.info(f"Escuchando en 0.0.0.0:{port} con Webhook URL: {full_webhook_url}")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path=webhook_path,
-            webhook_url=full_webhook_url,
-            drop_pending_updates=True
-        )
+        asyncio.run(run_webhook_app(app, token, external_url, port))
     else:
         logger.info("Iniciando Bot Legislativo Unificado en MODO POLLING...")
         threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
