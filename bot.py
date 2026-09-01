@@ -32,11 +32,21 @@ from santafe_sin_api import SantaFeSINAPI
 
 load_dotenv()
 
-# Configuración de Logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+# --- Configuración de Logging Dual (Consola + Archivo bot.log) ---
+log_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Console Handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+root_logger.addHandler(console_handler)
+
+# File Handler para guardar registros persistentes en bot.log
+file_handler = logging.FileHandler("bot.log", encoding="utf-8")
+file_handler.setFormatter(log_formatter)
+root_logger.addHandler(file_handler)
+
 logger = logging.getLogger(__name__)
 
 # Instancias de API
@@ -222,7 +232,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome_text, parse_mode="HTML")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    user = update.effective_user
+    chat = update.effective_chat
+    text = update.message.text.strip() if update.message and update.message.text else ""
+    
+    user_info = f"{user.name} (ID: {user.id})" if user else "Desconocido"
+    chat_id = chat.id if chat else "S/D"
+    logger.info(f"📥 [MENSAJE RECIBIDO] ChatID: {chat_id} | User: {user_info} | Texto: '{text}'")
+
     if not text:
         return
 
@@ -542,7 +559,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-    chat_id = query.message.chat_id
+    user = update.effective_user
+    chat_id = query.message.chat_id if query.message else "S/D"
+    user_info = f"{user.name} (ID: {user.id})" if user else "Desconocido"
+
+    logger.info(f"🔘 [CALLBACK RECIBIDO] ChatID: {chat_id} | User: {user_info} | Data: '{data}'")
 
     # 1. Tarjetas Directas
     if data.startswith("sf:card:"):
@@ -687,58 +708,8 @@ class WebhookAndHealthHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path_clean = self.path.strip("/")
-        if self.token_path and path_clean == self.token_path.strip("/"):
-            content_length = int(self.headers.get("Content-Length", 0))
-            post_data = self.rfile.read(content_length)
-            try:
-                data = json.loads(post_data.decode("utf-8"))
-                update = Update.de_json(data, self.app_instance.bot)
-                if self.app_loop and self.app_instance:
-                    asyncio.run_coroutine_threadsafe(
-                        self.app_instance.process_update(update), self.app_loop
-                    )
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b"OK")
-            except Exception as e:
-                logger.error(f"Error procesando update de Webhook: {e}", exc_info=True)
-                self.send_response(500)
-                self.end_headers()
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, format, *args):
-        pass
-
-async def run_webhook_app(app, token: str, external_url: str, port: int):
-    await app.initialize()
-    await app.start()
-
-    WebhookAndHealthHandler.app_instance = app
-    WebhookAndHealthHandler.app_loop = asyncio.get_running_loop()
-    WebhookAndHealthHandler.token_path = token
-
-    server = HTTPServer(("0.0.0.0", port), WebhookAndHealthHandler)
-    logger.info(f"Servidor Webhook + Health Check escuchando en puerto {port}")
-
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    await asyncio.sleep(1)
-
-    full_webhook_url = f"{external_url.rstrip('/')}/{token}"
-    logger.info(f"Registrando Webhook en Telegram: {full_webhook_url}")
-    await app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
-
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        pass
-    finally:
-        await app.stop()
-        await app.shutdown()
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error(f"❌ Error en el procesamiento del update ({update}): {context.error}", exc_info=context.error)
 
 # --- Main Application ---
 
@@ -758,10 +729,20 @@ def main():
     app.add_handler(CommandHandler("ayuda", start_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_error_handler(error_handler)
 
     if bot_mode == "webhook" and external_url:
-        logger.info("Iniciando Bot Legislativo Unificado en MODO WEBHOOK...")
-        asyncio.run(run_webhook_app(app, token, external_url, port))
+        webhook_path = token
+        full_webhook_url = f"{external_url.rstrip('/')}/{webhook_path}"
+        logger.info("Iniciando Bot Legislativo Unificado en MODO WEBHOOK Nativo PTB...")
+        logger.info(f"Escuchando en 0.0.0.0:{port} con Webhook URL: {full_webhook_url}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=webhook_path,
+            webhook_url=full_webhook_url,
+            drop_pending_updates=True
+        )
     else:
         logger.info("Iniciando Bot Legislativo Unificado en MODO POLLING...")
         threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
