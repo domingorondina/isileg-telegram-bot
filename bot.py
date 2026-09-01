@@ -1,8 +1,9 @@
 """
-Bot de Telegram Unificado para Información Legislativa:
+Bot de Telegram Unificado para Información Legislativa con Auditoría en Vivo:
 - 🏛️ ISILeg (Poder Legislativo y Decretos Provinciales - Santa Fe)
 - 🏢 SIN & Boletín Oficial de Santa Fe (Poder Ejecutivo Provincial)
 - 🇦🇷 InfoLEG (República Argentina / Nivel Federal)
+- 📊 Endpoint de Diagnóstico y Logs en Vivo (/logs y /healthz)
 
 Desarrollado para Domingo Rondina por Antigravity.
 """
@@ -13,8 +14,9 @@ import html
 import asyncio
 import logging
 import re
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
+import time
+import collections
+from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -32,20 +34,34 @@ from santafe_sin_api import SantaFeSINAPI
 
 load_dotenv()
 
-# --- Configuración de Logging Dual (Consola + Archivo bot.log) ---
+# --- Buffer Circular de Logs en Memoria para Diagnóstico en Vivo ---
+MAX_LOG_ENTRIES = 200
+live_log_buffer = collections.deque(maxlen=MAX_LOG_ENTRIES)
+
+class LiveLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            live_log_buffer.append({
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "level": record.levelname,
+                "msg": msg
+            })
+        except Exception:
+            pass
+
+# Configuración de Logging
 log_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 
-# Console Handler
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
 root_logger.addHandler(console_handler)
 
-# File Handler para guardar registros persistentes en bot.log
-file_handler = logging.FileHandler("bot.log", encoding="utf-8")
-file_handler.setFormatter(log_formatter)
-root_logger.addHandler(file_handler)
+live_handler = LiveLogHandler()
+live_handler.setFormatter(log_formatter)
+root_logger.addHandler(live_handler)
 
 logger = logging.getLogger(__name__)
 
@@ -53,42 +69,6 @@ logger = logging.getLogger(__name__)
 isileg_api = ISILegAPI()
 infoleg_api = InfoLegAPI()
 sin_api = SantaFeSINAPI()
-
-# --- Servidor HTTP para Render Health Check ---
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/healthz" or self.path == "/":
-            self.send_response(200)
-            self.send_header("Content-type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"OK")
-        elif self.path == "/test":
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                data = loop.run_until_complete(isileg_api.search_leyes("14207"))
-                self.send_response(200)
-                self.send_header("Content-type", "application/json")
-                self.end_headers()
-                self.wfile.write(str(data).encode("utf-8"))
-            except Exception as e:
-                self.send_response(500)
-                self.send_header("Content-type", "text/plain")
-                self.end_headers()
-                self.wfile.write(f"Error: {e}".encode("utf-8"))
-            finally:
-                loop.close()
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, format, *args):
-        pass
-
-def run_health_server(port: int = 8080):
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    logger.info(f"Servidor HTTP de Health Check escuchando en puerto {port}")
-    server.serve_forever()
 
 # --- Formateadores de Mensajes ---
 
@@ -218,6 +198,8 @@ def build_nacion_norma_card(detail: dict) -> str:
 # --- Handlers de Comandos y Mensajes ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    logger.info(f"Comando /start recibido de usuario: {user.username or user.first_name} (ID: {user.id})")
     welcome_text = (
         "👋 <b>Bienvenido al Asistente Legislativo Argentino Integral</b>\n\n"
         "Este bot consulta en tiempo real tres fuentes jurídicas oficiales:\n"
@@ -225,20 +207,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🏢 <b>SIN / Boletín Oficial</b>: Actos y Decretos del <b>Poder Ejecutivo de Santa Fe</b>.\n"
         "• 🇦🇷 <b>InfoLEG</b>: Leyes, Decretos y DNU de la <b>República Argentina (Nación)</b>.\n\n"
         "🔍 <b>¿Cómo buscar?</b>\n"
-        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>2756</code>) o número con año (ej. <code>2751/2008</code>, <code>70/2023</code>).\n"
+        "1. <b>Por número</b>: Envía el número (ej. <code>14207</code>, <code>20744</code>, <code>2756</code>, <code>11000</code>) o número con año (ej. <code>2751/2008</code>, <code>70/2023</code>).\n"
         "2. <b>Por tema</b>: Escribe palabras clave (ej: <code>contrato de trabajo</code>, <code>salud</code>, <code>presupuesto</code>).\n\n"
         "💡 <i>Podrás descargar PDFs oficiales, leer textos actualizados y navegar genealogías legislativas.</i>"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
     user = update.effective_user
-    chat = update.effective_chat
-    text = update.message.text.strip() if update.message and update.message.text else ""
-    
-    user_info = f"{user.name} (ID: {user.id})" if user else "Desconocido"
-    chat_id = chat.id if chat else "S/D"
-    logger.info(f"📥 [MENSAJE RECIBIDO] ChatID: {chat_id} | User: {user_info} | Texto: '{text}'")
+    logger.info(f"📥 MENSAJE RECIBIDO de {user.username or user.first_name} (ID: {user.id}): '{text}'")
 
     if not text:
         return
@@ -257,13 +235,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_unified_number_search(update: Update, context: ContextTypes.DEFAULT_TYPE, numero: str, anio: str = ""):
     busqueda_desc = f"Nº {numero}/{anio}" if anio else f"Nº {numero}"
+    t_start = time.time()
+    logger.info(f"🔎 INICIANDO BÚSQUEDA para {busqueda_desc}...")
+
     msg = await update.message.reply_text(
         f"🔍 Buscando <b>{html.escape(busqueda_desc)}</b> en todas las bases de <b>Santa Fe</b> y <b>Nación</b>...",
         parse_mode="HTML"
     )
 
     try:
-        # Búsqueda simultánea en todas las fuentes
         sf_ley_task = isileg_api.search_leyes(numero_ley=numero, tipo_ley=1, page=0, page_size=5)
         sf_dec_task = isileg_api.search_leyes(numero_ley=numero, tipo_ley=3, page=0, page_size=25)
         sf_sin_task = sin_api.search_decretos(numero=numero, anio=anio)
@@ -274,7 +254,7 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
             sf_ley_task, sf_dec_task, sf_sin_task, nac_ley_task, nac_dec_task, return_exceptions=True
         )
     except Exception as e:
-        logger.error(f"Error en búsqueda paralela: {e}")
+        logger.error(f"❌ Error en búsqueda paralela: {e}")
         await msg.edit_text(f"⚠️ Error al consultar las bases legislativas: {html.escape(str(e))}")
         return
 
@@ -299,7 +279,6 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
                 seen_sf_years.add(y)
                 sf_dec_items.append(it)
 
-    # Integrar resultados de SIN Santa Fe si el backend provincial responde
     if isinstance(sf_sins, list):
         for sin_item in sf_sins:
             y = sin_item.get("year", "")
@@ -318,6 +297,8 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
     nac_dec_items = nac_decs if isinstance(nac_decs, list) else []
 
     total_opciones = len(sf_ley_items) + len(sf_dec_items) + len(nac_ley_items) + len(nac_dec_items)
+    t_elapsed = time.time() - t_start
+    logger.info(f"✅ BÚSQUEDA COMPLETADA en {t_elapsed:.2f}s: SF Leyes={len(sf_ley_items)}, SF Decretos={len(sf_dec_items)}, Nac Leyes={len(nac_ley_items)}, Nac Decretos={len(nac_dec_items)} (Total: {total_opciones})")
 
     if total_opciones == 0:
         await msg.edit_text(
@@ -508,6 +489,9 @@ async def show_nacion_norma_card(target_msg, id_norma: str):
 # --- Búsqueda Temática / Palabras Clave ---
 
 async def handle_search_by_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
+    user = update.effective_user
+    logger.info(f"🔎 Búsqueda temática '{query}' por {user.username or user.first_name}")
+
     msg = await update.message.reply_text(
         f"🔍 Buscando <i>'{html.escape(query)}'</i> en Santa Fe y Nación...",
         parse_mode="HTML"
@@ -559,11 +543,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
+    chat_id = query.message.chat_id
     user = update.effective_user
-    chat_id = query.message.chat_id if query.message else "S/D"
-    user_info = f"{user.name} (ID: {user.id})" if user else "Desconocido"
-
-    logger.info(f"🔘 [CALLBACK RECIBIDO] ChatID: {chat_id} | User: {user_info} | Data: '{data}'")
+    logger.info(f"🖱️ CALLBACK recibido de {user.username or user.first_name}: {data}")
 
     # 1. Tarjetas Directas
     if data.startswith("sf:card:"):
@@ -693,23 +675,51 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text_rel += f"• <b>{r['tipo']} Nº {r['numero']}</b>\n  <i>\"{html.escape(r['contexto'])}\"</i>\n"
         await query.message.reply_text(text_rel, parse_mode="HTML")
 
-# --- Webhook & Health Check Server ---
-
-class WebhookAndHealthHandler(BaseHTTPRequestHandler):
-    app_instance = None
-    app_loop = None
-    token_path = ""
-
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-    def do_POST(self):
-        path_clean = self.path.strip("/")
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(f"❌ Error en el procesamiento del update ({update}): {context.error}", exc_info=context.error)
+    logger.error(f"❌ ERROR NO CONTROLADO en update ({update}): {context.error}", exc_info=context.error)
+
+# --- Servidor HTTP Ligero para Auditoría y Health Check en Render ---
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+
+class DiagnosticsHTTPHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/healthz" or self.path == "/":
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OK - Asistente Legislativo Activo")
+        elif self.path == "/logs":
+            self.send_response(200)
+            self.send_header("Content-type", "text/html; charset=utf-8")
+            self.end_headers()
+            
+            html_out = "<html><head><title>Logs en Vivo - Asistente Legislativo</title>"
+            html_out += "<style>body{font-family:monospace;background:#1e1e1e;color:#d4d4d4;padding:20px;} .item{margin-bottom:8px;border-bottom:1px solid #333;padding-bottom:4px;} .INFO{color:#4ec9b0;} .ERROR{color:#f44747;} .time{color:#888;}</style></head><body>"
+            html_out += "<h2>📊 Registro de Eventos en Vivo (Últimos 200 eventos)</h2>"
+            
+            if not live_log_buffer:
+                html_out += "<p>No hay eventos registrados aún en esta sesión.</p>"
+            else:
+                for entry in reversed(live_log_buffer):
+                    lvl = entry.get("level", "INFO")
+                    tm = entry.get("time", "")
+                    msg = html.escape(entry.get("msg", ""))
+                    html_out += f"<div class='item'><span class='time'>[{tm}]</span> <span class='{lvl}'>[{lvl}]</span> {msg}</div>"
+            
+            html_out += "</body></html>"
+            self.wfile.write(html_out.encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+def run_diagnostics_server(port: int = 8080):
+    server = HTTPServer(("0.0.0.0", port), DiagnosticsHTTPHandler)
+    logger.info(f"Servidor de Diagnóstico y Logs (/logs) activo en puerto {port}")
+    server.serve_forever()
 
 # --- Main Application ---
 
@@ -723,6 +733,10 @@ def main():
     bot_mode = os.getenv("BOT_MODE", "webhook").lower()
     external_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("WEBHOOK_URL")
 
+    # Iniciar servidor de diagnóstico /logs en hilo daemon
+    threading.Thread(target=run_diagnostics_server, args=(port,), daemon=True).start()
+
+    logger.info("Iniciando Bot Legislativo Unificado con Auditoría en Vivo...")
     app = ApplicationBuilder().token(token).build()
 
     app.add_handler(CommandHandler("start", start_command))
@@ -731,22 +745,8 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
 
-    if bot_mode == "webhook" and external_url:
-        webhook_path = token
-        full_webhook_url = f"{external_url.rstrip('/')}/{webhook_path}"
-        logger.info("Iniciando Bot Legislativo Unificado en MODO WEBHOOK Nativo PTB...")
-        logger.info(f"Escuchando en 0.0.0.0:{port} con Webhook URL: {full_webhook_url}")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path=webhook_path,
-            webhook_url=full_webhook_url,
-            drop_pending_updates=True
-        )
-    else:
-        logger.info("Iniciando Bot Legislativo Unificado en MODO POLLING...")
-        threading.Thread(target=run_health_server, args=(port,), daemon=True).start()
-        app.run_polling(drop_pending_updates=True)
+    # Polling continuo para máxima estabilidad, logging instantáneo y sin pérdida de updates
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
