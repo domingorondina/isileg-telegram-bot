@@ -701,7 +701,7 @@ class WebhookAndHealthHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"OK")
             except Exception as e:
-                logger.error(f"Error procesando update de Webhook: {e}")
+                logger.error(f"Error procesando update de Webhook: {e}", exc_info=True)
                 self.send_response(500)
                 self.end_headers()
         else:
@@ -715,10 +715,6 @@ async def run_webhook_app(app, token: str, external_url: str, port: int):
     await app.initialize()
     await app.start()
 
-    full_webhook_url = f"{external_url.rstrip('/')}/{token}"
-    logger.info(f"Registrando Webhook en Telegram: {full_webhook_url}")
-    await app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
-
     WebhookAndHealthHandler.app_instance = app
     WebhookAndHealthHandler.app_loop = asyncio.get_running_loop()
     WebhookAndHealthHandler.token_path = token
@@ -728,6 +724,12 @@ async def run_webhook_app(app, token: str, external_url: str, port: int):
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+
+    await asyncio.sleep(1)
+
+    full_webhook_url = f"{external_url.rstrip('/')}/{token}"
+    logger.info(f"Registrando Webhook en Telegram: {full_webhook_url}")
+    await app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
 
     try:
         while True:
