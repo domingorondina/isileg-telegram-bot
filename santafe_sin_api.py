@@ -1,7 +1,7 @@
 """
 Cliente de Integración con el Sistema de Información de Normativa (SIN)
 Poder Ejecutivo de la Provincia de Santa Fe & Boletín Oficial Provincial
-https://www.santafe.gov.ar/normativa/ | https://www.santafe.gob.ar/boletinoficial/
+https://www.santafe.gov.ar/normativa/ | https://www.santafe.gov.ar/boletinoficial/
 """
 
 import httpx
@@ -12,7 +12,7 @@ import datetime
 from typing import Optional, Dict, Any, List
 
 SIN_BASE_URL = "https://www.santafe.gov.ar/normativa"
-BOLETIN_BASE_URL = "https://www.santafe.gob.ar/boletinoficial"
+BOLETIN_BASE_URL = "https://www.santafe.gov.ar/boletinoficial"
 DEFAULT_TIMEOUT = 12.0
 
 class SantaFeSINAPI:
@@ -42,8 +42,7 @@ class SantaFeSINAPI:
     async def search_decretos(self, numero: str, anio: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Busca Decretos del Poder Ejecutivo de Santa Fe en el SIN (src/busqueda.php).
-        Manejo tolerante a fallos: devuelve los registros parseados si el backend provincial está activo,
-        o lista vacía si está en mantenimiento sin bloquear el bot.
+        Manejo tolerante a fallos: devuelve los registros parseados con año exacto, fecha y sumario.
         """
         clean_num = "".join(filter(str.isdigit, str(numero)))
         clean_anio = "".join(filter(str.isdigit, str(anio))) if anio else ""
@@ -87,23 +86,33 @@ class SantaFeSINAPI:
 
         for tr in soup.find_all("tr"):
             cells = tr.find_all(["td", "th"])
-            if len(cells) >= 3:
-                c0 = " ".join(cells[0].get_text(" ", strip=True).split())
-                c1 = " ".join(cells[1].get_text(" ", strip=True).split())
-                c2 = " ".join(cells[2].get_text(" ", strip=True).split())
+            if len(cells) >= 4:
+                # Estructura del SIN:
+                # c[0]: Número/Año (ej. '2439/2025')
+                # c[1]: Norma Legal (ej. 'DECRETO')
+                # c[2]: Descripción / Sumario
+                # c[3]: Fecha (ej. '25-09-2025')
+                c0 = cells[0].get_text(" ", strip=True)
+                c1 = cells[1].get_text(" ", strip=True)
+                c2 = cells[2].get_text(" ", strip=True)
+                c3 = cells[3].get_text(" ", strip=True)
 
-                if "Número" in c0 and "Descripción" in c2:
+                if "Número" in c0 or "Norma" in c1:
                     continue
 
-                year_m = re.search(r"/ (\d{4})", c0) or re.search(r"(\d{4})", c1)
+                # Extraer año de c0 (ej. '2439/2025') o de c3 (fecha)
+                year_m = re.search(r"/(?: )?(\d{4})", c0) or re.search(r"(\d{4})", c3)
                 year_str = year_m.group(1) if year_m else ""
 
+                num_m = re.search(r"^(\d+)", c0)
+                num_str = num_m.group(1) if num_m else default_num
+
                 results.append({
-                    "id": f"sin_{default_num}_{year_str}",
+                    "id": f"sin_{num_str}_{year_str}",
                     "tipo": "Decreto Provincial",
-                    "numero": default_num,
+                    "numero": num_str,
                     "year": year_str,
-                    "fecha": c1,
+                    "fecha": c3 if c3 and c3 != "-" else "No registrada",
                     "emisor": "Poder Ejecutivo de la Provincia de Santa Fe",
                     "jurisdiccion": "Santa Fe (Ejecutivo)",
                     "sumario": c2 or "Decreto del Poder Ejecutivo Provincial",
