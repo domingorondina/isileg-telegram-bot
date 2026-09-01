@@ -698,8 +698,13 @@ async def main():
     # Iniciar la aplicación de telegram
     await app.initialize()
     await app.start()
-    await app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
-    logger.info(f"Webhook registrado en Telegram: {full_webhook_url}")
+    
+    current_webhook = await app.bot.get_webhook_info()
+    if current_webhook.url != full_webhook_url:
+        await app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=False)
+        logger.info(f"Webhook registrado en Telegram: {full_webhook_url}")
+    else:
+        logger.info(f"Webhook ya activo y verificado: {full_webhook_url}")
 
     # Definir rutas en aiohttp
     routes = web.RouteTableDef()
