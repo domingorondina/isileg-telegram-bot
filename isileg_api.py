@@ -1,6 +1,6 @@
 """
 Cliente de Integración con ISILeg Web (Senado de Santa Fe)
-Soporta consultas directas y puente de proxy a través de ScraperAPI para despliegues en la nube (Render).
+Soporta consultas directas y puente de proxy ultra rápido a través de ScraperAPI (country_code=ar) para despliegues en la nube (Render).
 """
 
 import os
@@ -10,7 +10,7 @@ import urllib.parse
 from typing import Optional, Dict, Any, List
 
 BASE_URL = "https://isilegweb.senadosantafe.gob.ar/api"
-DEFAULT_TIMEOUT = 60.0
+DEFAULT_TIMEOUT = 10.0
 
 class ISILegAPI:
     def __init__(self, base_url: str = BASE_URL):
@@ -25,7 +25,7 @@ class ISILegAPI:
 
     def _build_url(self, target_url: str, params: Optional[Dict[str, Any]] = None, is_binary: bool = False) -> str:
         """
-        Construye la URL final, pasando por ScraperAPI si está configurada la clave.
+        Construye la URL final pasando por ScraperAPI con IP argentina (country_code=ar) si está configurada la clave.
         """
         if params:
             query_str = urllib.parse.urlencode(params)
@@ -37,7 +37,7 @@ class ISILegAPI:
         key = self._get_api_key()
         if key:
             encoded_target = urllib.parse.quote(full_target, safe="")
-            scraper_url = f"https://api.scraperapi.com?api_key={key}&url={encoded_target}"
+            scraper_url = f"https://api.scraperapi.com?api_key={key}&url={encoded_target}&country_code=ar"
             if is_binary:
                 scraper_url += "&binary_target=true"
             return scraper_url
@@ -55,7 +55,7 @@ class ISILegAPI:
         orden: str = "desc"
     ) -> Dict[str, Any]:
         """
-        Busca leyes en ISILeg según número o palabras clave.
+        Busca leyes en ISILeg según número o palabras clave con estrategia de fallback rápido.
         """
         params = {
             "tiposLey": str(tipo_ley),
@@ -103,87 +103,50 @@ class ISILegAPI:
         async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(final_url)
             resp.raise_for_status()
-            res = resp.json()
-            return res.get("data", {})
+            return resp.json()
 
-    async def get_pdf_bytes(self, pdf_path: str) -> Optional[bytes]:
+    async def get_pdf_bytes(self, sub_path: str) -> Optional[bytes]:
         """
-        Descarga el stream binario de un PDF dado su sub-path (ej. 'ley/pdfFile/6684/1').
+        Descarga el binario PDF desde ISILeg.
         """
-        raw_url = f"{self.base_url}/{pdf_path.lstrip('/')}"
+        raw_url = f"{self.base_url}/{sub_path.lstrip('/')}"
         final_url = self._build_url(raw_url, is_binary=True)
 
-        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
+        async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
             resp = await client.get(final_url)
             if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
                 return resp.content
-            return None
-
-    def _extract_text(self, val: Any) -> str:
-        if isinstance(val, str):
-            return val
-        elif isinstance(val, list):
-            res = []
-            for item in val:
-                if isinstance(item, str):
-                    res.append(item)
-                elif isinstance(item, dict):
-                    res.append(" ".join(str(v) for v in item.values() if v is not None))
-            return "\n".join(res)
-        elif isinstance(val, dict):
-            return " ".join(str(v) for v in val.values() if v is not None)
-        return ""
+        return None
 
     def extract_related_norms(self, detail: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Analiza los campos comentario, notas, modificaciones y texto para detectar normas vinculadas/modificatorias.
+        Extrae leyes modificatorias o vinculadas a partir de comentarios y nomencladores.
         """
         related = []
+        comentario = detail.get("comentario") or ""
+        
+        # Regex para capturar referencias a leyes
+        matches = re.finditer(r"(?:Ley|Decreto Ley|Decreto|D\.L\.)\s*(?:N[°ºo\.]*)?\s*(\d+)", comentario, re.IGNORECASE)
         seen = set()
+        for m in matches:
+            num = m.group(1)
+            if num not in seen and num != str(detail.get("numeroLey")):
+                seen.add(num)
+                tipo = "Ley"
+                match_str = m.group(0).lower()
+                if "decreto ley" in match_str or "d.l." in match_str:
+                    tipo = "Decreto Ley"
+                elif "decreto" in match_str:
+                    tipo = "Decreto"
 
-        text_parts = [
-            self._extract_text(detail.get("comentario")),
-            self._extract_text(detail.get("notas")),
-            self._extract_text(detail.get("anexos")),
-            self._extract_text(detail.get("modificaciones"))
-        ]
-        full_text = "\n".join(filter(None, text_parts))
+                start = max(0, m.start() - 30)
+                end = min(len(comentario), m.end() + 50)
+                snippet = comentario[start:end].replace("\r", " ").replace("\n", " ").strip()
 
-        patterns = [
-            r'(?:MODIFICAD[AO]\s+por\s+)?(Ley|Decreto\s+Ley|Decreto|Decr\.)\s+(?:N[º°\.]*\s*)?(\d+)(?:\s*/\s*(\d{2,4}))?',
-            r'(?:DEROGAD[AO]\s+por\s+)?(Ley|Decreto\s+Ley|Decreto|Decr\.)\s+(?:N[º°\.]*\s*)?(\d+)(?:\s*/\s*(\d{2,4}))?',
-        ]
-
-        current_num = str(detail.get("numeroLey", ""))
-
-        for raw_line in full_text.split("\n"):
-            line = raw_line.strip()
-            if not line:
-                continue
-
-            for pat in patterns:
-                for match in re.finditer(pat, line, re.IGNORECASE):
-                    norm_type = match.group(1).title()
-                    norm_num = match.group(2)
-                    norm_year = match.group(3) if match.lastindex >= 3 else None
-
-                    if norm_type.startswith("Decr"):
-                        norm_type = "Decreto"
-
-                    key = f"{norm_type}_{norm_num}"
-                    if key not in seen and norm_num != current_num:
-                        seen.add(key)
-                        
-                        start = max(0, match.start() - 20)
-                        end = min(len(line), match.end() + 60)
-                        context = line[start:end].strip()
-
-                        related.append({
-                            "tipo": norm_type,
-                            "numero": norm_num,
-                            "anio": norm_year,
-                            "contexto": context,
-                            "linea_completa": line
-                        })
+                related.append({
+                    "tipo": tipo,
+                    "numero": num,
+                    "contexto": f"...{snippet}..."
+                })
 
         return related
