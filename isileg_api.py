@@ -26,7 +26,9 @@ class ISILegAPI:
     async def _fetch_json(self, raw_url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Realiza la petición HTTP GET de datos JSON a ISILeg Web.
-        Intenta la conexión directa ultrarrápida (~200ms).
+        Intenta primero la conexión directa con un timeout rápido de 3.5s.
+        Si la IP de la nube está bloqueada por el cortafuegos provincial, pasa de inmediato
+        al fallback automático vía proxy CORS (proxy.cors.sh).
         """
         if params:
             query_str = urllib.parse.urlencode(params)
@@ -35,7 +37,8 @@ class ISILegAPI:
         else:
             direct_url = raw_url
 
-        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
+        # Intento 1: Conexión directa
+        async with httpx.AsyncClient(verify=False, timeout=3.5) as client:
             try:
                 resp = await client.get(direct_url, headers=self.headers)
                 if resp.status_code == 200:
@@ -43,7 +46,10 @@ class ISILegAPI:
             except Exception:
                 pass
 
-            resp = await client.get(direct_url, headers=self.headers)
+        # Intento 2: Fallback automático por proxy CORS para evitar geo-bloqueo de Render
+        proxy_url = f"https://proxy.cors.sh/{direct_url}"
+        async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+            resp = await client.get(proxy_url, headers=self.headers)
             resp.raise_for_status()
             return resp.json()
 
@@ -52,10 +58,23 @@ class ISILegAPI:
         Descarga el binario PDF desde ISILeg.
         """
         raw_url = f"{self.base_url}/{sub_path.lstrip('/')}"
-        async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
-            resp = await client.get(raw_url, headers=self.headers)
-            if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
-                return resp.content
+        
+        async with httpx.AsyncClient(verify=False, timeout=3.5) as client:
+            try:
+                resp = await client.get(raw_url, headers=self.headers)
+                if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
+                    return resp.content
+            except Exception:
+                pass
+
+        proxy_url = f"https://proxy.cors.sh/{raw_url}"
+        async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            try:
+                resp = await client.get(proxy_url, headers=self.headers)
+                if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
+                    return resp.content
+            except Exception:
+                pass
         return None
 
     async def search_leyes(
