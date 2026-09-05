@@ -735,6 +735,17 @@ async def main():
         try:
             req_data = await request.json()
             update = Update.de_json(req_data, app.bot)
+            
+            # Verificación de Lista Blanca (Silencio total si no es el administrador)
+            sender_id = None
+            if update.effective_user:
+                sender_id = str(update.effective_user.id)
+            elif update.effective_chat:
+                sender_id = str(update.effective_chat.id)
+
+            if sender_id != "510179444":
+                return web.Response(text="OK", status=200)
+
             # Procesar el update en segundo plano sin trabar la respuesta HTTP
             asyncio.create_task(app.process_update(update))
             return web.Response(text="OK", status=200)
