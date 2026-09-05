@@ -42,7 +42,36 @@ class ISILegAPI:
                 scraper_url += "&binary_target=true"
             return scraper_url
         
-        return full_target
+    async def _fetch_json(self, raw_url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Realiza la petición HTTP GET devolviendo el JSON.
+        Si SCRAPER_API_KEY está configurada, intenta vía ScraperAPI y si falla (ej: 401/403/429/timeout),
+        hace un fallback automático a conexión directa con el servidor oficial de ISILeg.
+        """
+        if params:
+            query_str = urllib.parse.urlencode(params)
+            sep = "&" if "?" in raw_url else "?"
+            direct_url = f"{raw_url}{sep}{query_str}"
+        else:
+            direct_url = raw_url
+
+        key = self._get_api_key()
+
+        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
+            if key:
+                encoded_target = urllib.parse.quote(direct_url, safe="")
+                scraper_url = f"https://api.scraperapi.com?api_key={key}&url={encoded_target}&country_code=ar"
+                try:
+                    resp = await client.get(scraper_url)
+                    if resp.status_code == 200:
+                        return resp.json()
+                except Exception:
+                    pass
+
+            # Direct Connection Fallback
+            resp = await client.get(direct_url, headers=self.headers)
+            resp.raise_for_status()
+            return resp.json()
 
     async def search_leyes(
         self,
@@ -76,12 +105,7 @@ class ISILegAPI:
             params["asunto"] = asunto
 
         raw_url = f"{self.base_url}/ley"
-        final_url = self._build_url(raw_url, params)
-
-        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.get(final_url)
-            resp.raise_for_status()
-            return resp.json()
+        return await self._fetch_json(raw_url, params)
 
     async def get_ley_by_number(self, numero_ley: str, tipo_ley: int = 1) -> Optional[Dict[str, Any]]:
         """
@@ -98,22 +122,28 @@ class ISILegAPI:
         Obtiene el detalle completo de una norma mediante su ID.
         """
         raw_url = f"{self.base_url}/ley/{id_ley}"
-        final_url = self._build_url(raw_url)
-
-        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.get(final_url)
-            resp.raise_for_status()
-            return resp.json()
+        return await self._fetch_json(raw_url)
 
     async def get_pdf_bytes(self, sub_path: str) -> Optional[bytes]:
         """
         Descarga el binario PDF desde ISILeg.
         """
         raw_url = f"{self.base_url}/{sub_path.lstrip('/')}"
-        final_url = self._build_url(raw_url, is_binary=True)
+        key = self._get_api_key()
 
         async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
-            resp = await client.get(final_url)
+            if key:
+                encoded_target = urllib.parse.quote(raw_url, safe="")
+                scraper_url = f"https://api.scraperapi.com?api_key={key}&url={encoded_target}&country_code=ar&binary_target=true"
+                try:
+                    resp = await client.get(scraper_url)
+                    if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
+                        return resp.content
+                except Exception:
+                    pass
+
+            # Direct Connection Fallback
+            resp = await client.get(raw_url, headers=self.headers)
             if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
                 return resp.content
         return None
