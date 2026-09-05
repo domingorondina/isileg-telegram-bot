@@ -126,7 +126,10 @@ class ISILegAPI:
         Obtiene el detalle completo de una norma mediante su ID.
         """
         raw_url = f"{self.base_url}/ley/{id_ley}"
-        return await self._fetch_json(raw_url)
+        res = await self._fetch_json(raw_url)
+        if isinstance(res, dict) and "data" in res and isinstance(res["data"], dict):
+            return res["data"]
+        return res if isinstance(res, dict) else {}
 
     async def get_pdf_bytes(self, sub_path: str) -> Optional[bytes]:
         """
