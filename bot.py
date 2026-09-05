@@ -246,6 +246,13 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         await msg.edit_text(f"⚠️ Error al consultar las bases legislativas: {html.escape(str(e))}")
         return
 
+    if isinstance(sf_leys, Exception):
+        logger.error(f"⚠️ Excepción en consulta ISILeg Leyes: {sf_leys}")
+    if isinstance(sf_decs, Exception):
+        logger.error(f"⚠️ Excepción en consulta ISILeg Decretos: {sf_decs}")
+    if isinstance(sf_sins, Exception):
+        logger.error(f"⚠️ Excepción en consulta SIN Decretos: {sf_sins}")
+
     # Santa Fe Leyes
     sf_ley_items = []
     if isinstance(sf_leys, dict) and sf_leys.get("data"):
