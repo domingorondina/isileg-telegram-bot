@@ -247,11 +247,11 @@ async def handle_unified_number_search(update: Update, context: ContextTypes.DEF
         return
 
     if isinstance(sf_leys, Exception):
-        logger.error(f"⚠️ Excepción en consulta ISILeg Leyes: {sf_leys}")
+        logger.error(f"⚠️ Excepción en consulta ISILeg Leyes: {repr(sf_leys)}")
     if isinstance(sf_decs, Exception):
-        logger.error(f"⚠️ Excepción en consulta ISILeg Decretos: {sf_decs}")
+        logger.error(f"⚠️ Excepción en consulta ISILeg Decretos: {repr(sf_decs)}")
     if isinstance(sf_sins, Exception):
-        logger.error(f"⚠️ Excepción en consulta SIN Decretos: {sf_sins}")
+        logger.error(f"⚠️ Excepción en consulta SIN Decretos: {repr(sf_sins)}")
 
     # Santa Fe Leyes
     sf_ley_items = []
