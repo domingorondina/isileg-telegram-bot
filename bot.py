@@ -183,11 +183,23 @@ def build_nacion_norma_card(detail: dict) -> str:
 
     return card
 
+ALLOWED_USERS = set(filter(None, os.getenv("ALLOWED_USERS", "510179444").split(",")))
+
+def is_user_allowed(user_id: int) -> bool:
+    if not ALLOWED_USERS:
+        return True
+    return str(user_id) in ALLOWED_USERS
+
 # --- Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"Comando /start de {user.username or user.first_name} (ID: {user.id})")
+    if not is_user_allowed(user.id):
+        logger.warning(f"⛔ ACCESO DENEGADO a /start de usuario no autorizado: {user.username or user.first_name} (ID: {user.id})")
+        await update.message.reply_text("⛔ Lo siento, este bot es de uso privado y exclusivo.")
+        return
+
     welcome_text = (
         "👋 <b>Bienvenido al Asistente Legislativo Argentino Integral</b>\n\n"
         "Este bot consulta en tiempo real tres fuentes jurídicas oficiales:\n"
@@ -205,6 +217,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     user = update.effective_user
     logger.info(f"📥 MENSAJE RECIBIDO de {user.username or user.first_name} (ID: {user.id}): '{text}'")
+
+    if not is_user_allowed(user.id):
+        logger.warning(f"⛔ ACCESO DENEGADO a usuario no autorizado: {user.username or user.first_name} (ID: {user.id})")
+        await update.message.reply_text("⛔ Lo siento, este bot es de uso privado y exclusivo.")
+        return
 
     if not text:
         return
@@ -533,10 +550,15 @@ async def handle_search_by_topic(update: Update, context: ContextTypes.DEFAULT_T
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     data = query.data
     chat_id = query.message.chat_id
     user = update.effective_user
+
+    if not is_user_allowed(user.id):
+        await query.answer("⛔ Lo siento, este bot es de uso privado y exclusivo.", show_alert=True)
+        return
+
+    await query.answer()
     logger.info(f"🖱️ CALLBACK recibido de {user.username or user.first_name}: {data}")
 
     # 1. Tarjetas Directas
