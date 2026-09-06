@@ -26,9 +26,8 @@ class ISILegAPI:
     async def _fetch_json(self, raw_url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Realiza la petición HTTP GET de datos JSON a ISILeg Web.
-        Intenta primero la conexión directa con un timeout rápido de 3.5s.
-        Si la IP de la nube está bloqueada por el cortafuegos provincial, pasa de inmediato
-        al fallback automático vía proxy CORS (proxy.cors.sh).
+        Prueba primero el proxy CORS (proxy.cors.sh) para superar el cortafuegos de geo-bloqueo de Render (~300ms).
+        Si falla, realiza fallback a conexión directa.
         """
         if params:
             query_str = urllib.parse.urlencode(params)
@@ -37,19 +36,21 @@ class ISILegAPI:
         else:
             direct_url = raw_url
 
-        # Intento 1: Conexión directa
-        async with httpx.AsyncClient(verify=False, timeout=3.5) as client:
+        # Intento 1: Proxy CORS (Instantáneo en servidores en la nube)
+        proxy_url = f"https://proxy.cors.sh/{direct_url}"
+        async with httpx.AsyncClient(verify=False, timeout=8.0) as client:
             try:
-                resp = await client.get(direct_url, headers=self.headers)
+                resp = await client.get(proxy_url, headers=self.headers)
                 if resp.status_code == 200:
-                    return resp.json()
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        return data
             except Exception:
                 pass
 
-        # Intento 2: Fallback automático por proxy CORS para evitar geo-bloqueo de Render
-        proxy_url = f"https://proxy.cors.sh/{direct_url}"
-        async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
-            resp = await client.get(proxy_url, headers=self.headers)
+        # Intento 2: Conexión directa (Fallback)
+        async with httpx.AsyncClient(verify=False, timeout=8.0) as client:
+            resp = await client.get(direct_url, headers=self.headers)
             resp.raise_for_status()
             return resp.json()
 
@@ -59,18 +60,20 @@ class ISILegAPI:
         """
         raw_url = f"{self.base_url}/{sub_path.lstrip('/')}"
         
-        async with httpx.AsyncClient(verify=False, timeout=3.5) as client:
+        # Intento 1: Proxy CORS
+        proxy_url = f"https://proxy.cors.sh/{raw_url}"
+        async with httpx.AsyncClient(verify=False, timeout=12.0) as client:
             try:
-                resp = await client.get(raw_url, headers=self.headers)
+                resp = await client.get(proxy_url, headers=self.headers)
                 if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
                     return resp.content
             except Exception:
                 pass
 
-        proxy_url = f"https://proxy.cors.sh/{raw_url}"
-        async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+        # Intento 2: Conexión directa
+        async with httpx.AsyncClient(verify=False, timeout=12.0) as client:
             try:
-                resp = await client.get(proxy_url, headers=self.headers)
+                resp = await client.get(raw_url, headers=self.headers)
                 if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
                     return resp.content
             except Exception:
