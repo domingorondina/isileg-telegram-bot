@@ -183,11 +183,34 @@ def build_nacion_norma_card(detail: dict) -> str:
 
     return card
 
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "510179444")
+
+async def notify_admin_if_external_user(context: ContextTypes.DEFAULT_TYPE, user, query_text: str):
+    """
+    Envía una alerta privada al administrador cuando una persona externa interactúa con el bot.
+    """
+    if not ADMIN_TELEGRAM_ID:
+        return
+    if str(user.id) != str(ADMIN_TELEGRAM_ID):
+        try:
+            uname = f"@{user.username}" if user.username else "Sin alias"
+            full_name = html.escape(user.full_name or user.first_name or "Usuario")
+            admin_msg = (
+                f"🔔 <b>Uso del Bot por Tercero</b>\n\n"
+                f"👤 <b>Usuario:</b> {full_name} ({uname})\n"
+                f"🆔 <b>ID Telegram:</b> <code>{user.id}</code>\n"
+                f"🔎 <b>Búsqueda:</b> <code>{html.escape(query_text[:200])}</code>"
+            )
+            await context.bot.send_message(chat_id=int(ADMIN_TELEGRAM_ID), text=admin_msg, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Error notificando al admin sobre uso externo: {e}")
+
 # --- Handlers ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"Comando /start de {user.username or user.first_name} (ID: {user.id})")
+    asyncio.create_task(notify_admin_if_external_user(context, user, "/start"))
     welcome_text = (
         "👋 <b>Bienvenido al Asistente Legislativo Argentino Integral</b>\n\n"
         "Este bot consulta en tiempo real tres fuentes jurídicas oficiales:\n"
@@ -208,6 +231,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not text:
         return
+
+    asyncio.create_task(notify_admin_if_external_user(context, user, text))
 
     norma_match = re.match(r"^(\d{1,6})(?:\s*[/–-]\s*(\d{2,4}))?$", text.replace(".", ""))
     if norma_match:
