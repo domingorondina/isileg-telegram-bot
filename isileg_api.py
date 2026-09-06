@@ -1,16 +1,19 @@
 """
 Cliente de Integración con ISILeg Web (Senado de Santa Fe)
-Soporta consultas directas y puente de proxy ultra rápido a través de ScraperAPI (country_code=ar) para despliegues en la nube (Render).
+Soporta consultas directas (entorno local en Argentina) y puente de proxy automático a través de ScraperAPI (country_code=ar) para despliegues en la nube (Render).
 """
 
 import os
 import httpx
 import re
+import logging
 import urllib.parse
 from typing import Optional, Dict, Any, List
 
+logger = logging.getLogger(__name__)
+
 BASE_URL = "https://isilegweb.senadosantafe.gob.ar/api"
-DEFAULT_TIMEOUT = 10.0
+DEFAULT_TIMEOUT = 15.0
 
 class ISILegAPI:
     def __init__(self, base_url: str = BASE_URL):
@@ -19,6 +22,30 @@ class ISILegAPI:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
         }
+
+    async def _fetch_json(self, raw_url: str, timeout: float = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+        """
+        Obtiene JSON de ISILeg. Intenta conexión directa (rápida si se ejecuta en Argentina)
+        y ante cualquier falla o timeout (como en Render en EE.UU.), conmuta automáticamente
+        a ScraperAPI con geolocalización en Argentina (country_code=ar).
+        """
+        # 1. Intento directo (timeout corto 2.5s)
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=2.5) as client:
+                resp = await client.get(raw_url, headers=self.headers)
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception as e:
+            logger.debug(f"Direct ISILeg fetch failed/timed out, switching to ScraperAPI AR: {e}")
+
+        # 2. Conmutación a ScraperAPI (country_code=ar) para la nube
+        scraper_key = os.getenv("SCRAPER_API_KEY", "4b0fab5f99b2d71c635ab26eacdac192")
+        proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&country_code=ar&url={urllib.parse.quote(raw_url)}"
+        
+        async with httpx.AsyncClient(verify=False, timeout=timeout) as client:
+            resp = await client.get(proxy_url)
+            resp.raise_for_status()
+            return resp.json()
 
     async def search_leyes(
         self,
@@ -51,11 +78,8 @@ class ISILegAPI:
         if asunto:
             params["asunto"] = asunto
 
-        url = f"{self.base_url}/ley"
-        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.get(url, params=params, headers=self.headers)
-            resp.raise_for_status()
-            return resp.json()
+        raw_url = f"{self.base_url}/ley?{urllib.parse.urlencode(params)}"
+        return await self._fetch_json(raw_url)
 
     async def get_ley_by_number(self, numero_ley: str, tipo_ley: int = 1) -> Optional[Dict[str, Any]]:
         """
@@ -71,23 +95,38 @@ class ISILegAPI:
         """
         Obtiene el detalle completo de una norma mediante su ID.
         """
-        url = f"{self.base_url}/ley/{id_ley}"
-        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.get(url, headers=self.headers)
-            resp.raise_for_status()
-            res = resp.json()
-            return res.get("data", {})
+        raw_url = f"{self.base_url}/ley/{id_ley}"
+        res = await self._fetch_json(raw_url)
+        return res.get("data", {})
 
     async def get_pdf_bytes(self, pdf_path: str) -> Optional[bytes]:
         """
         Descarga el stream binario de un PDF dado su sub-path (ej. 'ley/pdfFile/6684/1').
         """
-        url = f"{self.base_url}/{pdf_path.lstrip('/')}"
-        async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
-            resp = await client.get(url, headers=self.headers)
-            if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
-                return resp.content
-            return None
+        clean_path = pdf_path.lstrip('/')
+        raw_url = f"{self.base_url}/{clean_path}"
+
+        # 1. Intento directo
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=3.0) as client:
+                resp = await client.get(raw_url, headers=self.headers)
+                if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
+                    return resp.content
+        except Exception:
+            pass
+
+        # 2. ScraperAPI fallback para la nube
+        scraper_key = os.getenv("SCRAPER_API_KEY", "4b0fab5f99b2d71c635ab26eacdac192")
+        proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&country_code=ar&url={urllib.parse.quote(raw_url)}"
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+                resp = await client.get(proxy_url)
+                if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
+                    return resp.content
+        except Exception:
+            pass
+
+        return None
 
     def extract_related_norms(self, detail: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -96,7 +135,6 @@ class ISILegAPI:
         related = []
         comentario = detail.get("comentario") or ""
         
-        # Regex para capturar referencias a leyes
         matches = re.finditer(r"(?:Ley|Decreto Ley|Decreto|D\.L\.)\s*(?:N[°ºo\.]*)?\s*(\d+)", comentario, re.IGNORECASE)
         seen = set()
         for m in matches:
