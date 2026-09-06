@@ -16,69 +16,9 @@ class ISILegAPI:
     def __init__(self, base_url: str = BASE_URL):
         self.base_url = base_url
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
-            "Referer": "https://isilegweb.senadosantafe.gob.ar/",
-            "Origin": "https://isilegweb.senadosantafe.gob.ar"
         }
-
-    async def _fetch_json(self, raw_url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Realiza la petición HTTP GET de datos JSON a ISILeg Web.
-        Prueba primero el proxy CORS (proxy.cors.sh) para superar el cortafuegos de geo-bloqueo de Render (~300ms).
-        Si falla, realiza fallback a conexión directa.
-        """
-        if params:
-            query_str = urllib.parse.urlencode(params)
-            sep = "&" if "?" in raw_url else "?"
-            direct_url = f"{raw_url}{sep}{query_str}"
-        else:
-            direct_url = raw_url
-
-        # Intento 1: Proxy CORS (Instantáneo en servidores en la nube)
-        proxy_url = f"https://proxy.cors.sh/{direct_url}"
-        async with httpx.AsyncClient(verify=False, timeout=8.0) as client:
-            try:
-                resp = await client.get(proxy_url, headers=self.headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, dict):
-                        return data
-            except Exception:
-                pass
-
-        # Intento 2: Conexión directa (Fallback)
-        async with httpx.AsyncClient(verify=False, timeout=8.0) as client:
-            resp = await client.get(direct_url, headers=self.headers)
-            resp.raise_for_status()
-            return resp.json()
-
-    async def _fetch_bytes(self, sub_path: str) -> Optional[bytes]:
-        """
-        Descarga el binario PDF desde ISILeg.
-        """
-        raw_url = f"{self.base_url}/{sub_path.lstrip('/')}"
-        
-        # Intento 1: Proxy CORS
-        proxy_url = f"https://proxy.cors.sh/{raw_url}"
-        async with httpx.AsyncClient(verify=False, timeout=12.0) as client:
-            try:
-                resp = await client.get(proxy_url, headers=self.headers)
-                if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
-                    return resp.content
-            except Exception:
-                pass
-
-        # Intento 2: Conexión directa
-        async with httpx.AsyncClient(verify=False, timeout=12.0) as client:
-            try:
-                resp = await client.get(raw_url, headers=self.headers)
-                if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
-                    return resp.content
-            except Exception:
-                pass
-        return None
 
     async def search_leyes(
         self,
@@ -111,8 +51,11 @@ class ISILegAPI:
         if asunto:
             params["asunto"] = asunto
 
-        raw_url = f"{self.base_url}/ley"
-        return await self._fetch_json(raw_url, params)
+        url = f"{self.base_url}/ley"
+        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
+            resp = await client.get(url, params=params, headers=self.headers)
+            resp.raise_for_status()
+            return resp.json()
 
     async def get_ley_by_number(self, numero_ley: str, tipo_ley: int = 1) -> Optional[Dict[str, Any]]:
         """
@@ -128,17 +71,23 @@ class ISILegAPI:
         """
         Obtiene el detalle completo de una norma mediante su ID.
         """
-        raw_url = f"{self.base_url}/ley/{id_ley}"
-        res = await self._fetch_json(raw_url)
-        if isinstance(res, dict) and "data" in res and isinstance(res["data"], dict):
-            return res["data"]
-        return res if isinstance(res, dict) else {}
+        url = f"{self.base_url}/ley/{id_ley}"
+        async with httpx.AsyncClient(verify=False, timeout=DEFAULT_TIMEOUT) as client:
+            resp = await client.get(url, headers=self.headers)
+            resp.raise_for_status()
+            res = resp.json()
+            return res.get("data", {})
 
-    async def get_pdf_bytes(self, sub_path: str) -> Optional[bytes]:
+    async def get_pdf_bytes(self, pdf_path: str) -> Optional[bytes]:
         """
-        Descarga el binario PDF desde ISILeg.
+        Descarga el stream binario de un PDF dado su sub-path (ej. 'ley/pdfFile/6684/1').
         """
-        return await self._fetch_bytes(sub_path)
+        url = f"{self.base_url}/{pdf_path.lstrip('/')}"
+        async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
+            resp = await client.get(url, headers=self.headers)
+            if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
+                return resp.content
+            return None
 
     def extract_related_norms(self, detail: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
