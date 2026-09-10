@@ -1,6 +1,6 @@
 """
 Cliente de Integración con ISILeg Web (Senado de Santa Fe)
-Soporta consultas directas (entorno local en Argentina) y puente de proxy automático a través de ScraperAPI (country_code=ar) para despliegues en la nube (Render).
+Soporta consultas directas (entorno local en Argentina) y puente de proxy ultrarrápido a través de ScraperAPI (country_code=ar) para despliegues en la nube (Render).
 """
 
 import os
@@ -25,20 +25,23 @@ class ISILegAPI:
 
     async def _fetch_json(self, raw_url: str, timeout: float = DEFAULT_TIMEOUT) -> Dict[str, Any]:
         """
-        Obtiene JSON de ISILeg. Intenta conexión directa (rápida si se ejecuta en Argentina)
-        y ante cualquier falla o timeout (como en Render en EE.UU.), conmuta automáticamente
-        a ScraperAPI con geolocalización en Argentina (country_code=ar).
+        Obtiene JSON de ISILeg.
+        En la nube (Render en EE.UU.), conmuta de inmediato a ScraperAPI AR sin perder tiempo en reintentos fallidos.
+        En entorno local (Argentina), intenta primero la conexión directa.
         """
-        # 1. Intento directo (timeout corto 2.5s)
-        try:
-            async with httpx.AsyncClient(verify=False, timeout=2.5) as client:
-                resp = await client.get(raw_url, headers=self.headers)
-                if resp.status_code == 200:
-                    return resp.json()
-        except Exception as e:
-            logger.debug(f"Direct ISILeg fetch failed/timed out, switching to ScraperAPI AR: {e}")
+        is_cloud = bool(os.getenv("RENDER") or os.getenv("BOT_MODE") == "webhook")
 
-        # 2. Conmutación a ScraperAPI (country_code=ar) para la nube
+        # 1. Si no estamos en la nube, intentar conexión directa rápida (1.5s timeout)
+        if not is_cloud:
+            try:
+                async with httpx.AsyncClient(verify=False, timeout=1.5) as client:
+                    resp = await client.get(raw_url, headers=self.headers)
+                    if resp.status_code == 200:
+                        return resp.json()
+            except Exception as e:
+                logger.debug(f"Direct ISILeg fetch failed/timed out: {e}")
+
+        # 2. En la nube (o fallback local), ir de inmediato a ScraperAPI (country_code=ar)
         scraper_key = os.getenv("SCRAPER_API_KEY", "4b0fab5f99b2d71c635ab26eacdac192")
         proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&country_code=ar&url={urllib.parse.quote(raw_url)}"
         
@@ -105,17 +108,17 @@ class ISILegAPI:
         """
         clean_path = pdf_path.lstrip('/')
         raw_url = f"{self.base_url}/{clean_path}"
+        is_cloud = bool(os.getenv("RENDER") or os.getenv("BOT_MODE") == "webhook")
 
-        # 1. Intento directo
-        try:
-            async with httpx.AsyncClient(verify=False, timeout=3.0) as client:
-                resp = await client.get(raw_url, headers=self.headers)
-                if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
-                    return resp.content
-        except Exception:
-            pass
+        if not is_cloud:
+            try:
+                async with httpx.AsyncClient(verify=False, timeout=2.0) as client:
+                    resp = await client.get(raw_url, headers=self.headers)
+                    if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
+                        return resp.content
+            except Exception:
+                pass
 
-        # 2. ScraperAPI fallback para la nube
         scraper_key = os.getenv("SCRAPER_API_KEY", "4b0fab5f99b2d71c635ab26eacdac192")
         proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&country_code=ar&url={urllib.parse.quote(raw_url)}"
         try:
