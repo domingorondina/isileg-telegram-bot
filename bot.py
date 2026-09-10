@@ -782,6 +782,20 @@ async def main():
             logger.error(f"Error procesando webhook de Telegram: {e}")
             return web.Response(text="Error", status=500)
 
+    async def keep_alive_loop():
+        """
+        Auto-ping cada 5 minutos al propio servidor para mantener Render activo sin reposo (cold start).
+        """
+        while True:
+            await asyncio.sleep(300)
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    await client.get(f"http://127.0.0.1:{port}/healthz")
+            except Exception:
+                pass
+
+    asyncio.create_task(keep_alive_loop())
+
     web_app = web.Application()
     web_app.add_routes(routes)
 
@@ -789,7 +803,7 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"Servidor Webhook + Logs corriendo en http://0.0.0.0:{port}")
+    logger.info(f"Servidor Webhook + Logs corriendo en http://0.0.0.0:{port} (Keep-Alive Activo)")
 
     # Mantener corriendo
     try:
