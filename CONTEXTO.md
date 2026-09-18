@@ -8,10 +8,11 @@
 **Dashboard Render**: [https://dashboard.render.com/web/srv-da6r8sh0er6s73d699pg](https://dashboard.render.com/web/srv-da6r8sh0er6s73d699pg)  
 **URL Pública Webhook/Health Check**: [https://isileg-telegram-bot.onrender.com](https://isileg-telegram-bot.onrender.com)  
 **Repositorio GitHub**: [https://github.com/domingorondina/isileg-telegram-bot](https://github.com/domingorondina/isileg-telegram-bot)  
-**Última Actualización**: 2026-08-29  
-**Conversation ID**: `626e87fb-8ea9-4a62-8176-6638a96d1d7f`
+**Última Actualización**: 2026-09-16  
+**Conversation ID**: `c2086ce6-eded-47cd-8b98-8d3f21857ae7`
 
 ---
+
 
 ## 1. Resumen Ejecutivo
 
@@ -22,6 +23,9 @@ Técnicamente, se compone de:
 2. Un backend con una **API REST pública en `/api/`** que entrega datos estructurados en formato JSON.
 3. Repositorio de documentos en formato **PDF** (textos sancionados, versiones actualizadas, fojas escaneadas de expedientes y diarios de sesiones).
 4. **Bot de Telegram (`bot.py`)**: Asistente interactivo con botones inline para búsqueda de leyes, descarga de documentos oficiales y navegación por normas modificatorias y vinculadas.
+- **Estructura Integrada**:
+  - `infoleg/`: Módulo y scripts de investigación de normativa nacional (InfoLEG).
+  - `santafe_normativa/`: Scripts y pruebas del Sistema de Información de Normativa (SIN - Ejecutivo de Santa Fe).
 5. **Modo Webhook & Servidor HTTP**: Escucha en el puerto 8080. En Render se activa por demanda ante mensajes de Telegram (entrando en estado de suspensión automática en inactividad para no agotar la cuota de horas).
 
 ---
