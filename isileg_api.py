@@ -42,7 +42,10 @@ class ISILegAPI:
                 logger.debug(f"Direct ISILeg fetch failed/timed out: {e}")
 
         # 2. En la nube (o fallback local), ir de inmediato a ScraperAPI (country_code=ar)
-        scraper_key = os.getenv("SCRAPER_API_KEY", "4b0fab5f99b2d71c635ab26eacdac192")
+        scraper_key = os.getenv("SCRAPER_API_KEY", "").strip()
+        if not scraper_key:
+            logger.error("SCRAPER_API_KEY no configurada en las variables de entorno.")
+            raise ValueError("SCRAPER_API_KEY no configurada.")
         proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&country_code=ar&url={urllib.parse.quote(raw_url)}"
         
         async with httpx.AsyncClient(verify=False, timeout=timeout) as client:
@@ -119,7 +122,10 @@ class ISILegAPI:
             except Exception:
                 pass
 
-        scraper_key = os.getenv("SCRAPER_API_KEY", "4b0fab5f99b2d71c635ab26eacdac192")
+        scraper_key = os.getenv("SCRAPER_API_KEY", "").strip()
+        if not scraper_key:
+            logger.error("SCRAPER_API_KEY no configurada en las variables de entorno.")
+            return None
         proxy_url = f"http://api.scraperapi.com?api_key={scraper_key}&country_code=ar&url={urllib.parse.quote(raw_url)}"
         try:
             async with httpx.AsyncClient(verify=False, timeout=20.0) as client:
